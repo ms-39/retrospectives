@@ -21,13 +21,15 @@ retrospectives/
 
 ## 正本と公開版
 
-- **正本はプロジェクトのリポジトリ（非公開）** に置く：`docs/retrospective/<YYYY-MM-topic>/index.html`
+- **正本はプロジェクトのリポジトリ（非公開）の `retrospective` ブランチ** に置く：`<YYYY-MM-topic>/index.html`
+  - 開発用のブランチ（main など）とは履歴を分けた専用のブランチ（orphan）にする。開発の作業ツリー・検索・AI エージェントの文脈に振り返りが入らないようにするため
+  - CLAUDE.md・AGENTS.md・開発の手順書には振り返りのことを書かない（決まりはこの README だけに置く）
 - ここ（公開）には、下のチェックを通したものだけを写す
 - 直すときは正本を直してから、チェックをやり直してここへ写す
 
 ## 振り返りを足す手順
 
-1. プロジェクトのリポジトリで正本を作る（`docs/retrospective/<YYYY-MM-topic>/index.html`）
+1. プロジェクトのリポジトリの `retrospective` ブランチに正本を置く（`<YYYY-MM-topic>/index.html`）
 2. 下の「公開前のチェック」をすべて満たす
 3. このリポジトリに `<project>/<YYYY-MM-topic>/index.html` として写す
 4. `index.html`（一覧）の `<ul class="list">` の先頭に 1 件足す（日付・題・一文・タグ）
