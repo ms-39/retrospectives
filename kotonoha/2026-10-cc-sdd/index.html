@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cc-sdd をどう拡張して「ことのは」を作ったか | retrospectives</title>
+<meta name="description" content="子供のことばを記録する iPhone 向けアプリを、仕様駆動開発ツール cc-sdd を土台に作った振り返り。cc-sdd のまま使った部分と、Codex レビュー・モデルの使い分け・人の判断として足した部分。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Source+Code+Pro:wght@500&display=swap">
+<style>
+:root {
+  --ground: #F6F5F0; --surface: #FFFFFF; --ink: #1C211D; --ink-2: #2A302B; --muted: #565C57; --line: #DCDAD2; --band: #ECEAE2;
+  --cc-bg: #E7EAF0; --cc-fg: #33405A; --cc-ink: #26324A; --cc-bar: #5B6B8C;
+  --ext-bg: #DCEBDA; --ext-fg: #24552F; --ext-ink: #1F3D25; --ext-bar: #2F6B3A;
+  --hu-bg: #F5E4CA; --hu-fg: #6E3D0C; --hu-bar: #9A5A14;
+  --m-opus-bg: #2F2A4A; --m-opus-fg: #FFFFFF; --m-sonnet-bg: #E3DDF5; --m-haiku-bg: #F1EFE8; --m-dark: #2F2A4A;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--ground); color: var(--ink); font-family: 'Zen Kaku Gothic New', system-ui, -apple-system, 'Hiragino Sans', sans-serif; line-height: 1.6; }
+.page { max-width: 1440px; margin: 0 auto; padding: 72px 72px 64px; display: flex; flex-direction: column; gap: 64px; }
+a { color: var(--ext-fg); }
+h1, h2, p, ul, ol { margin: 0; }
+.eyebrow { font-size: 18px; font-weight: 700; letter-spacing: 0.12em; color: var(--muted); }
+h1 { font-size: 64px; font-weight: 900; line-height: 1.2; }
+h2 { font-size: 34px; font-weight: 900; }
+.lead { max-width: 1080px; font-size: 22px; line-height: 1.75; color: #3A403B; }
+header { display: flex; flex-direction: column; gap: 20px; }
+.back { font-size: 16px; font-weight: 700; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+.legend span { display: inline-flex; align-items: center; gap: 10px; padding: 8px 16px; border-radius: 999px; font-size: 17px; font-weight: 700; }
+.legend i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
+.cc { background: var(--cc-bg); color: var(--cc-fg); }
+.ext { background: var(--ext-bg); color: var(--ext-fg); }
+.hu { background: var(--hu-bg); color: var(--hu-fg); }
+.section { display: flex; flex-direction: column; gap: 24px; }
+
+.stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
+.stat { display: flex; flex-direction: column; gap: 6px; padding: 22px 20px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
+.stat .v { font-size: 46px; font-weight: 900; line-height: 1.1; }
+.stat .v small { font-size: 20px; font-weight: 700; margin-left: 4px; }
+.stat .l { font-size: 17px; font-weight: 700; }
+.stat .n { font-size: 14px; line-height: 1.5; color: var(--muted); }
+
+.roles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.role { display: flex; flex-direction: column; border-radius: 16px; overflow: hidden; background: var(--surface); border: 1px solid var(--line); }
+.role .head { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px; }
+.role .tag { font-size: 14px; font-weight: 700; letter-spacing: 0.08em; }
+.role .name { font-size: 26px; font-weight: 900; }
+.role .r { font-size: 16px; font-weight: 700; }
+.role ul { padding: 18px 22px 22px 40px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; color: var(--ink-2); }
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 18px 24px; border-radius: 14px; background: var(--band); font-size: 17px; font-weight: 700; color: var(--ink-2); }
+.flow .arrow { color: var(--muted); }
+
+.steps { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.step { display: flex; flex-direction: column; gap: 10px; min-height: 170px; padding: 18px 20px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); border-top: 6px solid var(--cc-bar); }
+.step.t-ext { border-top-color: var(--ext-bar); }
+.step .top { display: flex; align-items: baseline; gap: 10px; }
+.step .no { font-family: 'Source Code Pro', monospace; font-size: 18px; font-weight: 500; color: var(--muted); }
+.step .t { font-size: 20px; font-weight: 900; line-height: 1.35; }
+.step .d { font-size: 15px; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.chip { padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; }
+
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.panel { display: flex; flex-direction: column; gap: 16px; padding: 28px; border-radius: 18px; background: var(--surface); border: 1px solid var(--line); }
+.panel h2 { font-size: 28px; }
+.panel .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.panel p { font-size: 16px; line-height: 1.7; color: #3A403B; }
+table { border-collapse: collapse; width: 100%; font-size: 16px; }
+th { text-align: left; padding: 10px 8px; border-bottom: 2px solid var(--ink); }
+td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td.who { font-weight: 700; }
+td.why { line-height: 1.5; color: #3A403B; }
+.m { display: inline-block; padding: 3px 12px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.m-opus { background: var(--m-opus-bg); color: var(--m-opus-fg); }
+.m-sonnet { background: var(--m-sonnet-bg); color: var(--m-dark); }
+.m-haiku { background: var(--m-haiku-bg); color: var(--m-dark); }
+.m-codex { background: var(--line); color: var(--ink); }
+.gates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.gate { display: flex; flex-direction: column; gap: 6px; padding: 16px; border-radius: 12px; background: var(--ext-bg); }
+.gate b { font-size: 19px; font-weight: 900; color: var(--ext-fg); }
+.gate span { font-size: 15px; color: var(--ext-ink); }
+.panel ul { padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 16px; line-height: 1.65; color: var(--ink-2); }
+
+.list { display: flex; flex-direction: column; gap: 14px; padding: 28px; border-radius: 18px; }
+.list h2 { font-size: 28px; }
+.list ul { padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 17px; }
+.list.cc, .list.cc h2 { color: var(--cc-ink); }
+.list.ext, .list.ext h2 { color: var(--ext-ink); }
+
+.cases { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.case { display: flex; flex-direction: column; gap: 10px; padding: 22px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); }
+.case .lv { padding: 3px 10px; border-radius: 999px; background: #F1EFE8; color: #3A403B; font-size: 13px; font-weight: 700; }
+.case .w { font-size: 18px; font-weight: 900; line-height: 1.45; }
+.case .th { font-size: 15px; line-height: 1.65; color: #3A403B; }
+
+footer { display: flex; flex-direction: column; gap: 16px; padding: 32px 36px; border-radius: 20px; background: var(--ink); color: var(--ground); }
+footer .big { font-size: 30px; font-weight: 900; line-height: 1.4; }
+footer .p { font-size: 17px; line-height: 1.75; color: var(--line); }
+footer .src { font-size: 14px; color: #B9B7AE; }
+
+@media (max-width: 1100px) {
+  .page { padding: 48px 32px; gap: 48px; }
+  h1 { font-size: 46px; }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .roles, .steps, .cases { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .two { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .page { padding: 32px 16px; gap: 40px; }
+  h1 { font-size: 32px; }
+  h2 { font-size: 26px; }
+  .lead { font-size: 17px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stat .v { font-size: 36px; }
+  .roles, .steps, .cases, .gates { grid-template-columns: minmax(0, 1fr); }
+  .step { min-height: 0; }
+  .panel, .list { padding: 20px; }
+  footer { padding: 24px 20px; }
+  footer .big { font-size: 22px; }
+  table { font-size: 14px; }
+}
+</style>
+</head>
+<body>
+<main class="page">
+
+  <header>
+    <a class="back" href="../../">← retrospectives の一覧</a>
+    <p class="eyebrow">個人開発の振り返り ｜ 2026.09.26 – 10.11</p>
+    <h1>cc-sdd をどう拡張して、<br>「ことのは」を作ったか</h1>
+    <p class="lead">子供のことばを記録する iPhone 向けアプリ（PWA）を、仕様駆動開発のツール cc-sdd を土台に作った。cc-sdd の流れはそのまま活かし、<b>書き手を 1 つに絞る</b>・<b>独立した見張りを置く</b>・<b>決めるのは人</b>、の 3 点を足した。このページは、どこが cc-sdd のままで、どこを足したのかを示す。</p>
+    <div class="legend">
+      <span class="cc"><i style="background: var(--cc-bar)"></i>cc-sdd のまま使ったもの</span>
+      <span class="ext"><i style="background: var(--ext-bar)"></i>このプロジェクトで足したもの</span>
+      <span class="hu"><i style="background: var(--hu-bar)"></i>人が決める・確かめる</span>
+    </div>
+  </header>
+
+  <section class="section" aria-labelledby="h-stats">
+    <h2 id="h-stats">数字で見る</h2>
+    <div class="stats">
+      <div class="stat"><span class="v">16<small>日</small></span><span class="l">開発期間</span><span class="n">最初のコミットから見た目の作り直しのマージまで</span></div>
+      <div class="stat"><span class="v">7<small>spec</small></span><span class="l">完了した spec</span><span class="n">インフラ土台から UI 作り直しまで。ほかに 1 つは見送り</span></div>
+      <div class="stat"><span class="v">333</span><span class="l">コミット</span><span class="n">タスクごとに、レビューを通してから 1 コミット</span></div>
+      <div class="stat"><span class="v">41<small>回</small></span><span class="l">Codex のレビュー</span><span class="n">設計 15 回・実装 26 回。すべて記録に残した</span></div>
+      <div class="stat"><span class="v">26</span><span class="l">不変条件</span><span class="n">「評価を保存しない」など、レビューの最優先の観点</span></div>
+      <div class="stat"><span class="v">約2,400</span><span class="l">自動テスト</span><span class="n">画面 1,035・API 373・インフラ 985</span></div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="h-roles">
+    <h2 id="h-roles">4 者の役割 ―― 書くのは 1 つだけ</h2>
+    <div class="roles">
+      <div class="role">
+        <div class="head hu"><span class="tag">人が決める・確かめる</span><span class="name">人（開発者）</span><span class="r">判断と確認</span></div>
+        <ul><li>要件の未決定や、設計の選択肢を決める</li><li>レビューを続けるか打ち切るかを決める</li><li>/kiro-impl を自分で打ち、実機で確かめ、マージする</li></ul>
+      </div>
+      <div class="role">
+        <div class="head ext"><span class="tag">拡張</span><span class="name">Claude（チャット）</span><span class="r">オーケストレータ</span></div>
+        <ul><li>出力を読み、判断の材料とおすすめを示す</li><li>Claude Code に渡す指示文を作る</li><li>リポジトリは読むだけ。書かない</li></ul>
+      </div>
+      <div class="role">
+        <div class="head cc"><span class="tag">cc-sdd</span><span class="name">Claude Code</span><span class="r">唯一の書き手</span></div>
+        <ul><li>要件・設計・タスク・実装・修正をすべて担う</li><li>/kiro-impl でタスクごとに実装役・レビュー役を起こす</li><li>指摘には 1 件ずつ「直した／直さない」で返す</li></ul>
+      </div>
+      <div class="role">
+        <div class="head ext"><span class="tag">拡張</span><span class="name">Codex</span><span class="r">レビュー専任</span></div>
+        <ul><li>読み取り専用。ファイルを変えない</li><li>仕様と差分だけを見る。会話や推論は渡さない</li><li>不変条件の違反を最優先で探す</li></ul>
+      </div>
+    </div>
+    <p class="flow">
+      <span>人 と Claude が相談して決める</span><span class="arrow" aria-hidden="true">→</span>
+      <span>指示文を Claude Code に渡す</span><span class="arrow" aria-hidden="true">→</span>
+      <span>Claude Code が書く</span><span class="arrow" aria-hidden="true">→</span>
+      <span>Codex が読むだけでレビュー</span><span class="arrow" aria-hidden="true">→</span>
+      <span>Claude Code が「直した／直さない」を返答</span><span class="arrow" aria-hidden="true">→</span>
+      <span>人が判断</span>
+    </p>
+  </section>
+
+  <section class="section" aria-labelledby="h-steps">
+    <h2 id="h-steps">1 つの spec が通る道</h2>
+    <ol class="steps">
+      <li class="step"><div class="top"><span class="no">01</span><span class="t">ロードマップと brief</span></div><span class="d">spec の分け方と順番を決める</span><div class="chips"><span class="chip cc">cc-sdd</span></div></li>
+      <li class="step"><div class="top"><span class="no">02</span><span class="t">要件</span></div><span class="d">EARS 形式の受け入れ基準。未決定は人に聞く</span><div class="chips"><span class="chip cc">cc-sdd</span><span class="chip hu">人</span></div></li>
+      <li class="step"><div class="top"><span class="no">03</span><span class="t">設計と自己確認</span></div><span class="d">design.md を作り、validate-design で自分で見直す</span><div class="chips"><span class="chip cc">cc-sdd</span></div></li>
+      <li class="step t-ext"><div class="top"><span class="no">04</span><span class="t">ゲート A：設計レビュー</span></div><span class="d">Codex が読むだけで見る。必須・最大 2 往復</span><div class="chips"><span class="chip ext">拡張</span></div></li>
+      <li class="step"><div class="top"><span class="no">05</span><span class="t">タスク</span></div><span class="d">実装の単位に分ける。人が承認する</span><div class="chips"><span class="chip cc">cc-sdd</span><span class="chip hu">人</span></div></li>
+      <li class="step t-ext"><div class="top"><span class="no">06</span><span class="t">実装ブランチ</span></div><span class="d">仕様は main、実装は spec 名のブランチ。設計の直しはブランチで</span><div class="chips"><span class="chip ext">拡張</span></div></li>
+      <li class="step"><div class="top"><span class="no">07</span><span class="t">/kiro-impl</span></div><span class="d">タスクごとに実装役 → 独立レビュー役 → デバッグ役</span><div class="chips"><span class="chip cc">cc-sdd</span><span class="chip ext">拡張</span></div></li>
+      <li class="step t-ext"><div class="top"><span class="no">08</span><span class="t">ゲート B：実装レビュー</span></div><span class="d">タスクの範囲を渡して Codex が見る。数回に分けて回す</span><div class="chips"><span class="chip ext">拡張</span></div></li>
+      <li class="step"><div class="top"><span class="no">09</span><span class="t">validate-impl</span></div><span class="d">全体のテストと、要件の網羅を確かめる</span><div class="chips"><span class="chip cc">cc-sdd</span></div></li>
+      <li class="step t-ext"><div class="top"><span class="no">10</span><span class="t">実地確認</span></div><span class="d">spec ごとの手順書で、二人の iPhone で確かめる</span><div class="chips"><span class="chip ext">拡張</span><span class="chip hu">人</span></div></li>
+      <li class="step t-ext"><div class="top"><span class="no">11</span><span class="t">PR と最後のレビュー</span></div><span class="d">GitHub の Codex が自動で見る。merge commit で入れる</span><div class="chips"><span class="chip ext">拡張</span><span class="chip hu">人</span></div></li>
+      <li class="step"><div class="top"><span class="no">12</span><span class="t">記録を残す</span></div><span class="d">レビューと返答、判断の理由を tasks.md と docs/reviews/ に</span><div class="chips"><span class="chip cc">cc-sdd</span><span class="chip ext">拡張</span></div></li>
+    </ol>
+  </section>
+
+  <section class="two">
+    <div class="panel">
+      <div class="row"><h2>モデルの使い分け</h2><span class="chip ext">拡張・最後に追加</span></div>
+      <p>開発中はすべて Opus で動かしていた。費用の大半は、コードを大量に読み書きする実装役。判断の重い段階と独立したレビューは Opus に残し、手を動かす役と、テストの要約だけを軽いモデルに回した。</p>
+      <table>
+        <thead><tr><th scope="col">役</th><th scope="col">モデル</th><th scope="col">理由</th></tr></thead>
+        <tbody>
+          <tr><td class="who">親（オーケストレーション）</td><td><span class="m m-opus">Opus</span></td><td class="why">流れ全体の判断</td></tr>
+          <tr><td class="who">要件・設計・タスク・validate</td><td><span class="m m-opus">Opus</span></td><td class="why">量は少なく、判断が重い</td></tr>
+          <tr><td class="who">実装役</td><td><span class="m m-sonnet">Sonnet</span></td><td class="why">費用の大半。仕様とテストが決まった中で手を動かす</td></tr>
+          <tr><td class="who">レビュー役・デバッグ役</td><td><span class="m m-opus">Opus</span></td><td class="why">独立した目と原因の調べは質を保つ</td></tr>
+          <tr><td class="who">test-runner</td><td><span class="m m-haiku">Haiku</span></td><td class="why">長いテストのログを読んで要約するだけ</td></tr>
+          <tr><td class="who">外部レビュー</td><td><span class="m m-codex">Codex</span></td><td class="why">別系統のモデルで、同じ癖の見落としを減らす</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <div class="row"><h2>Codex レビューの仕組み</h2><span class="chip ext">拡張</span></div>
+      <div class="gates">
+        <div class="gate"><b>ゲート A　設計のあと</b><span>必ず回す。最大 2 往復、残れば人が判断。誤りがタスクと実装に広がる前に止める、いちばん効く場所</span></div>
+        <div class="gate"><b>ゲート B　実装のあと</b><span>同期の中心・データの層・インフラに触れたら必ず回す。タスクの範囲を渡して、未着手の分を指摘させない</span></div>
+      </div>
+      <ul>
+        <li><b>独立性は、渡すもので保つ。</b>Codex には仕様と差分だけを渡し、Claude の会話や推論は渡さない。ファイルも変えさせない（AGENTS.md）</li>
+        <li><b>観点の最優先は 26 の不変条件。</b>違反はどんなに小さく見えても blocker</li>
+        <li><b>結果は書き換えず残す。</b>docs/reviews/ に保存し、指摘ごとに「直した／直さない（理由）」を response.md に書く</li>
+        <li><b>止めどころを決める。</b>指摘が珍しい場面に移ったら打ち切る。壊れやすい道は継ぎはぎより単純化する</li>
+        <li><b>マージ前にもう一度。</b>PR を開くと GitHub の Codex が自動でレビューする</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="two">
+    <div class="list cc">
+      <h2>cc-sdd のまま使ったもの</h2>
+      <ul>
+        <li>steering（product・tech・structure）で、前提をすべての会話に渡す</li>
+        <li>要件 → 設計 → タスクの 3 段階と、段階ごとの人の承認（spec.json）</li>
+        <li>EARS 形式の受け入れ基準</li>
+        <li>validate-gap・validate-design・validate-impl による自己点検</li>
+        <li>/kiro-impl のタスクごとのサブエージェント（実装 → 独立レビュー → デバッグ）</li>
+        <li>Implementation Notes で、タスク間に学びを引き継ぐ</li>
+        <li>verify-completion：新しい証拠なしに「完了」と言わない</li>
+        <li>/kiro-impl はモデルからは起動せず、人が打つ</li>
+      </ul>
+    </div>
+    <div class="list ext">
+      <h2>このプロジェクトで足したもの</h2>
+      <ul>
+        <li>invariants.md：26 の不変条件。全段階で読み込み、守れない設計は人に相談</li>
+        <li>AGENTS.md：Codex をレビュー専任にし、実装者の説明を根拠にさせない</li>
+        <li>ゲート A・B のスクリプト：設計と実装を Codex に見せ、結果を自動で保存</li>
+        <li>レビューの記録：結果は書き換えず、指摘ごとに「直した／直さない（理由）」</li>
+        <li>止めどころ：2 往復で人が判断。珍しい場面に移ったら打ち切り、単純化を選ぶ</li>
+        <li>ブランチの決まり：仕様は main、実装はブランチ、merge commit で入れる</li>
+        <li>spec ごとの実地確認の手順書。実データは手順書にもリポジトリにも書かない</li>
+        <li>設計メモは人のもの：変えるときは提案として示す</li>
+        <li>モデルの使い分けと、テストを要約する test-runner（Haiku）</li>
+        <li>チャットの Claude をオーケストレータに置き、判断と指示文を整理</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="h-cases">
+    <h2 id="h-cases">仕組みが止めたもの（実例）</h2>
+    <div class="cases">
+      <div class="case"><div class="chips"><span class="chip ext">ゲート A</span><span class="lv">blocker</span></div><span class="w">動画を付けただけで、相手が直した本文を古い本文で上書きする</span><span class="th">設計の段階で発見。本文が変わっていなければ発話を書かない、という決まりにして実装前に塞いだ</span></div>
+      <div class="case"><div class="chips"><span class="chip ext">ゲート B</span><span class="lv">blocker</span></div><span class="w">遅れて届いた古い応答が、外した添付を元に戻す</span><span class="th">継ぎはぎをやめ、行を書き換える道を 1 本に絞る形に単純化して解消</span></div>
+      <div class="case"><div class="chips"><span class="chip ext">ゲート B</span><span class="lv">major</span></div><span class="w">初回の登録が断られると、夫婦のどちらも子供の情報を直せなくなる</span><span class="th">子供の情報だけ送信の判定を分け、発話の守りは変えずに解消</span></div>
+      <div class="case"><div class="chips"><span class="chip hu">人の判断</span><span class="lv">打ち切り</span></div><span class="w">数ミリ秒の間に保存を押したときだけ起きる指摘</span><span class="th">直さない理由を記録してレビューを終え、実機での確認に回した</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <p class="big">書き手は 1 つ。見張りは独立に。決めるのは人。</p>
+    <p class="p">cc-sdd が用意する「要件 → 設計 → タスク → 実装」の型と、タスクごとの独立レビューは、そのままでも強い。足したのは、その外側の見張りと止めどころ ―― 別のモデルによる読み取り専用のレビュー、プロダクト固有の不変条件、記録の残し方、そして人が判断する場所の明示。</p>
+    <p class="src">数字は、プロジェクトのリポジトリ（非公開）の .kiro/、docs/reviews/、docs/dev-workflow.md と、最終の全体の検査より（2026-10-11 時点）。実データは含まない。</p>
+  </footer>
+</main>
+</body>
+</html>
