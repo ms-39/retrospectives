@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>チャットだけで、家族のアプリはどこまで作れるか | retrospectives</title>
+<meta name="description" content="パパの通勤を家族が地図で見守るアプリ「どこどこパパ」を、Claude Code のクラウドセッションへのチャットの依頼だけで作った振り返り。確かめたかった 4 つのこと（チャットだけでどこまで・AWS Amplify・クラウドセッション・アレクサ）と、次に活かすこと。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Source+Code+Pro:wght@500;600&display=swap">
+<style>
+:root {
+  color-scheme: dark;
+  /* アプリと同じ：地図の夜の地色、半透明の紺のパネル、水色の光 */
+  --night: #070B14;
+  --panel: rgba(15, 23, 42, 0.88);
+  --panel-2: rgba(30, 41, 59, 0.85);
+  --edge: rgba(255, 255, 255, 0.12);
+  --ink: #F8FAFC;
+  --ink-2: #CBD5E1;
+  --muted: #94A3B8;
+  --cyan: #38BDF8;
+  --glow: #7DF9FF;
+  /* 路線の色（地図の 4 つの路線） */
+  --l1: #EF4444;
+  --l2: #F97316;
+  --l3: #10B981;
+  --l4: #3B82F6;
+  /* 役割の色 */
+  --ai: #38BDF8;
+  --hu: #FBBF24;
+  --op: #A78BFA;
+  --mono: 'Source Code Pro', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; background: var(--night); }
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: 'Zen Kaku Gothic New', 'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif;
+  line-height: 1.65;
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(56, 189, 248, 0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 30%, rgba(16, 185, 129, 0.06), transparent 60%),
+    var(--night);
+  min-height: 100vh;
+}
+/* 地図の境界線のような、うっすらした点線の地模様 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.10) 1px, transparent 0);
+  background-size: 22px 22px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.35));
+}
+a { color: var(--cyan); }
+h1, h2, h3, p, ul, ol { margin: 0; }
+.page { position: relative; max-width: 1360px; margin: 0 auto; padding: 64px 64px 72px; display: flex; flex-direction: column; gap: 72px; }
+
+/* ---------- ヘッダー ---------- */
+header { position: relative; display: flex; flex-direction: column; gap: 20px; }
+.back { font-size: 15px; font-weight: 700; text-decoration: none; display: inline-flex; gap: 6px; align-items: center; width: fit-content; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--edge); background: var(--panel); }
+.back:hover, .back:focus-visible { border-color: var(--cyan); }
+.eyebrow { font-family: var(--mono); font-size: 15px; letter-spacing: 0.14em; color: var(--glow); text-shadow: 0 0 10px rgba(125, 249, 255, 0.5); }
+h1 { font-size: 60px; font-weight: 900; line-height: 1.22; letter-spacing: 0.01em; }
+h1 .glow { color: var(--glow); text-shadow: 0 0 18px rgba(125, 249, 255, 0.55); }
+.lead { max-width: 1000px; font-size: 19px; line-height: 1.85; color: var(--ink-2); }
+.lead b { color: var(--ink); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; font-size: 15px; font-weight: 700; border: 1px solid; background: var(--panel); }
+.pill i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.p-ai { color: #BAE6FD; border-color: rgba(56, 189, 248, 0.55); box-shadow: 0 0 12px rgba(56, 189, 248, 0.25); }
+.p-ai i { background: var(--ai); box-shadow: 0 0 8px var(--ai); }
+.p-hu { color: #FDE68A; border-color: rgba(251, 191, 36, 0.5); }
+.p-hu i { background: var(--hu); box-shadow: 0 0 8px var(--hu); }
+.p-op { color: #DDD6FE; border-color: rgba(167, 139, 250, 0.5); }
+.p-op i { background: var(--op); box-shadow: 0 0 8px var(--op); }
+
+/* 路線の光の流れ（アプリの地図と同じ、点線が流れる 4 本の線） */
+/* ---------- ヘッダーの路線図（アプリの線と同じ：縁取り → 光 → 芯 → 流れる光） ---------- */
+.route { width: 100%; height: auto; display: block; overflow: hidden; margin-top: 4px; }
+.route .casing { fill: none; stroke: #0B1220; stroke-width: 13; stroke-linejoin: round; stroke-linecap: round; }
+.route .halo { fill: none; stroke-width: 11; opacity: 0.28; stroke-linejoin: round; stroke-linecap: round; filter: blur(3px); }
+.route .core { fill: none; stroke-width: 5; stroke-linejoin: round; stroke-linecap: round; }
+.route .flow { fill: none; stroke: #fff; stroke-width: 2; opacity: 0.7; stroke-dasharray: 2 14; stroke-linecap: round; animation: flow 1.6s linear infinite; }
+.route .st { fill: #0F172A; stroke: #F8FAFC; stroke-width: 2.4; }
+.route .st.far { stroke: #94A3B8; stroke-dasharray: 2 2.5; }
+.route .xfer { fill: #0F172A; stroke: #F8FAFC; stroke-width: 2.4; }
+/* ---------- 背景の日本地図（スクロールに合わせて北から南へ） ---------- */
+.bgmap { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.bgmap svg { position: absolute; top: 0; left: 58%; height: 175vh; width: auto; aspect-ratio: 842 / 882; transform: translate(-50%, 0); will-change: transform; opacity: 0.7; }
+.bgmap .land { fill: rgba(17, 27, 46, 0.9); stroke: rgba(56, 189, 248, 0.35); stroke-width: 1.1; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.bgmap .rail { fill: none; stroke: #3B82F6; stroke-width: 6; opacity: 0.22; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.bgmap .rail-core { fill: none; stroke: #93C5FD; stroke-width: 1.4; opacity: 0.6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 3 13; vector-effect: non-scaling-stroke; animation: flow 2.4s linear infinite; }
+.bgmap::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(7, 11, 20, 0.75), rgba(7, 11, 20, 0.15) 55%, rgba(7, 11, 20, 0.35)); }
+.page { z-index: 1; }
+/* ---------- 節の区切りの線路（画面に入ると電車が 1 本通る） ---------- */
+.track { position: relative; height: 70px; margin: -34px 0; overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+.track::before { content: ''; position: absolute; left: 0; right: 0; top: 50px; height: 4px; border-radius: 2px; background: var(--c); box-shadow: 0 0 0 3px #0B1220, 0 0 14px var(--c); opacity: 0.85; }
+.track::after { content: ''; position: absolute; left: 0; right: 0; top: 51px; height: 2px; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.75) 0 2px, transparent 2px 18px); animation: flowx 1.6s linear infinite; }
+.track .train { position: absolute; left: 0; bottom: 15px; display: flex; align-items: flex-end; gap: 2px; z-index: 1; transform: translateX(-100%); animation: run var(--dur, 80s) linear var(--delay, 0s) infinite paused; filter: drop-shadow(0 6px 6px rgba(0, 0, 0, 0.55)); }
+.track .train img { height: 34px; width: auto; display: block; }
+.track .train img.pan { height: 40px; }
+.track.go .train { animation-play-state: running; }
+.track.t1 { --c: var(--l1); } .track.t2 { --c: var(--l2); } .track.t3 { --c: var(--l3); } .track.t4 { --c: var(--l4); }
+.track.t4 .train img { height: 32px; }
+@keyframes run { to { transform: translateX(var(--w, 100vw)); } }
+@keyframes flowx { to { background-position: 18px 0; } }
+@keyframes flow { to { stroke-dashoffset: -32; } }
+
+/* ---------- 見出し ---------- */
+.section { display: flex; flex-direction: column; gap: 22px; }
+h2 { font-size: 32px; font-weight: 900; display: flex; align-items: center; gap: 12px; }
+h2 .num { font-family: var(--mono); font-size: 16px; color: var(--muted); font-weight: 600; letter-spacing: 0.1em; }
+.sub { color: var(--muted); font-size: 16px; margin-top: -10px; }
+
+/* ネオンの線のアイコン（アプリの NeonIcon と同じ描き方） */
+.ni { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 1.5px currentColor) drop-shadow(0 0 6px rgba(56, 189, 248, 0.5)); overflow: visible; }
+
+/* ---------- 数字 ---------- */
+.stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.stat { display: flex; flex-direction: column; gap: 6px; padding: 20px 18px; border-radius: 16px; background: var(--panel); border: 1px solid var(--edge); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.stat .v { font-family: var(--mono); font-size: 44px; font-weight: 600; line-height: 1.1; color: var(--glow); text-shadow: 0 0 14px rgba(125, 249, 255, 0.45); }
+.stat .v small { font-family: 'Zen Kaku Gothic New', sans-serif; font-size: 18px; font-weight: 700; margin-left: 4px; color: var(--ink); text-shadow: none; }
+.stat .l { font-size: 16px; font-weight: 700; }
+.stat .n { font-size: 13px; line-height: 1.55; color: var(--muted); }
+
+/* ---------- 4 つの問い ---------- */
+.qs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.q { --c: var(--cyan); position: relative; display: flex; flex-direction: column; gap: 16px; padding: 26px 26px 24px; border-radius: 18px; background: var(--panel); border: 1px solid var(--edge); overflow: hidden; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.q::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--c); box-shadow: 0 0 14px var(--c), 0 0 4px var(--c); }
+.q::after { content: ''; position: absolute; left: 0; right: 0; top: 1px; height: 2px; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.85) 0 3px, transparent 3px 18px); background-size: 36px 2px; animation: dash 1.4s linear infinite; opacity: 0.7; }
+@keyframes dash { to { background-position: 36px 0; } }
+.q.c1 { --c: var(--l1); } .q.c2 { --c: var(--l2); } .q.c3 { --c: var(--l3); } .q.c4 { --c: var(--l4); }
+.q .qh { display: flex; align-items: center; gap: 12px; }
+.q .qh .ni { color: var(--c); width: 26px; height: 26px; }
+.q .qno { font-family: var(--mono); font-size: 14px; color: var(--c); font-weight: 600; letter-spacing: 0.1em; }
+.q h3 { font-size: 24px; font-weight: 900; line-height: 1.4; }
+.q .ans { font-size: 16px; line-height: 1.8; color: var(--ink-2); }
+.q .ans b { color: var(--ink); }
+.tag { display: inline-block; font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid; margin-bottom: 6px; }
+.t-ok { color: #6EE7B7; border-color: rgba(16, 185, 129, 0.5); }
+.t-ng { color: #FCA5A5; border-color: rgba(239, 68, 68, 0.5); }
+.t-learn { color: var(--glow); border-color: rgba(125, 249, 255, 0.5); }
+.t-next { color: #FDE68A; border-color: rgba(251, 191, 36, 0.5); }
+.q ul { padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.7; color: var(--ink-2); }
+.block { display: flex; flex-direction: column; }
+
+/* ---------- 課題 ---------- */
+.issues { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.issue { display: flex; flex-direction: column; gap: 14px; padding: 26px; border-radius: 18px; background: linear-gradient(180deg, rgba(251, 191, 36, 0.10), rgba(15, 23, 42, 0.88) 55%); border: 1px solid rgba(251, 191, 36, 0.4); }
+.issue h3 { font-size: 22px; font-weight: 900; line-height: 1.45; color: #FEF3C7; }
+.issue p { font-size: 16px; line-height: 1.8; color: var(--ink-2); }
+.issue .next { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; background: rgba(2, 6, 23, 0.55); border: 1px solid var(--edge); }
+.issue .next b { color: #FDE68A; font-size: 15px; }
+.issue .next ul { padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 15px; color: var(--ink-2); }
+.models { display: flex; flex-wrap: wrap; gap: 8px; }
+.m { display: inline-flex; gap: 6px; align-items: baseline; padding: 4px 12px; border-radius: 999px; font-size: 14px; font-weight: 700; background: var(--panel-2); border: 1px solid var(--edge); }
+.m span { font-weight: 500; color: var(--muted); font-size: 13px; }
+
+/* ---------- テーマ ---------- */
+.themes { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.theme { display: flex; flex-direction: column; gap: 10px; padding: 20px; border-radius: 16px; background: var(--panel); border: 1px solid var(--edge); }
+.theme .ni { color: var(--glow); }
+.theme h3 { font-size: 18px; font-weight: 900; line-height: 1.45; }
+.theme p { font-size: 14.5px; line-height: 1.75; color: var(--ink-2); }
+
+/* ---------- 流れ ---------- */
+.steps { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; counter-reset: s; }
+.step { position: relative; display: flex; flex-direction: column; gap: 8px; min-height: 150px; padding: 18px 18px 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--edge); }
+.step .top { display: flex; align-items: center; gap: 10px; }
+.step .no { font-family: var(--mono); font-size: 14px; color: var(--muted); }
+.step .t { font-size: 18px; font-weight: 900; }
+.step .d { font-size: 14px; line-height: 1.65; color: var(--ink-2); }
+.who { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.who .pill { padding: 2px 10px; font-size: 12.5px; gap: 6px; }
+.who .pill i { width: 7px; height: 7px; }
+
+/* ---------- 実例 ---------- */
+.cases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.case { display: flex; flex-direction: column; gap: 10px; padding: 20px; border-radius: 16px; background: var(--panel); border: 1px solid var(--edge); border-left: 3px solid var(--c, var(--cyan)); }
+.case .k { font-family: var(--mono); font-size: 13px; color: var(--c, var(--cyan)); letter-spacing: 0.06em; }
+.case .w { font-size: 17px; font-weight: 900; line-height: 1.5; }
+.case .th { font-size: 14.5px; line-height: 1.75; color: var(--ink-2); }
+
+/* ---------- 次に活かす ---------- */
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.list { display: flex; flex-direction: column; gap: 14px; padding: 26px; border-radius: 18px; background: var(--panel); border: 1px solid var(--edge); }
+.list h3 { font-size: 22px; font-weight: 900; display: flex; align-items: center; gap: 10px; }
+.list ul { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; line-height: 1.7; color: var(--ink-2); }
+.list.good h3 { color: #6EE7B7; }
+.list.next h3 { color: #FDE68A; }
+.list li b { color: var(--ink); }
+
+/* ---------- フッター ---------- */
+footer { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 34px 36px; border-radius: 20px; background: linear-gradient(135deg, rgba(56, 189, 248, 0.16), rgba(15, 23, 42, 0.95) 60%); border: 1px solid rgba(56, 189, 248, 0.45); box-shadow: 0 0 40px rgba(56, 189, 248, 0.12); overflow: hidden; }
+footer .big { font-size: 30px; font-weight: 900; line-height: 1.45; }
+footer .big .glow { color: var(--glow); text-shadow: 0 0 16px rgba(125, 249, 255, 0.6); }
+footer .p { font-size: 16.5px; line-height: 1.85; color: var(--ink-2); max-width: 1050px; }
+footer .src { font-size: 13px; color: var(--muted); }
+
+@media (prefers-reduced-motion: reduce) {
+  .route .flow, .q::after, .bgmap .rail-core, .track::after { animation: none; }
+  .track .train { animation: none; left: 50%; transform: translateX(-50%); }
+}
+@media (max-width: 1100px) {
+  .page { padding: 48px 28px; gap: 56px; }
+  h1 { font-size: 44px; }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .qs, .issues, .two { grid-template-columns: minmax(0, 1fr); }
+  .themes, .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cases { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .page { padding: 32px 16px 48px; gap: 44px; }
+  h1 { font-size: 31px; }
+  h2 { font-size: 24px; }
+  .lead { font-size: 16px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .stat { padding: 16px 14px; }
+  .stat .v { font-size: 34px; }
+  .themes, .steps, .cases { grid-template-columns: minmax(0, 1fr); }
+  .step { min-height: 0; }
+  .q, .issue, .list { padding: 20px 18px; }
+  .q h3 { font-size: 20px; }
+  footer { padding: 24px 20px; }
+  footer .big { font-size: 22px; }
+  .route { height: 118px; width: 100%; }
+  .bgmap svg { left: 50%; }
+  .track .train img { height: 26px; }
+  .track .train img.pan { height: 31px; }
+  .track.t4 .train img { height: 24px; }
+}
+</style>
+</head>
+<body>
+<!-- アイコン（アプリと同じ線のネオン調） -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-walk" viewBox="0 0 24 24"><circle cx="13" cy="4.5" r="1.8"/><path d="M12.5 8 10 13.5l3 2.5 1 5"/><path d="M10 13.5 8.5 20.5"/><path d="M12 9.5l3 2.5 3 .5"/><path d="M12 9.5 8.5 11 7 14"/></symbol>
+    <symbol id="i-gps" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 21s-6.5-6.2-6.5-11a6.5 6.5 0 0 1 13 0c0 4.8-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M5.5 18.5l1.7-1.7M16.8 7.2l1.7-1.7"/><circle cx="12" cy="12" r="6.3"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3"/><path d="M4 4.5v3.5h3.5"/><path d="M12 8v4.3l2.8 1.7"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4.5 5.5h15v10h-8l-4 3.5v-3.5h-3z"/><path d="M8 9.5h8M8 12.5h5"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18.5h10a4 4 0 0 0 .6-7.95A5.5 5.5 0 0 0 7 9.5a4.5 4.5 0 0 0 0 9z"/></symbol>
+    <symbol id="i-voice" viewBox="0 0 24 24"><path d="M5 9.5v5M9 7v10M13 4.5v15M17 8v8M21 10.5v3"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.5-3 8-7 9.5-4-1.5-7-5-7-9.5V6z"/><path d="M9 12l2.2 2.2L15.5 10"/></symbol>
+    <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="2.8" width="10" height="18.4" rx="2.2"/><path d="M11 18h2"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 12-4.9"/><path d="M17 3.5v3.8h-3.8"/><path d="M19 12a7 7 0 0 1-12 4.9"/><path d="M7 20.5v-3.8h3.8"/></symbol>
+  </defs>
+</svg>
+
+<div class="bgmap" aria-hidden="true">
+  <svg viewBox="0 0 842 882" preserveAspectRatio="xMidYMin meet">
+    <path class="land" d="M150.9 787.4L161.7 769.0L167.3 767.3L165.4 759.3L162.8 757.0L164.0 753.1L158.2 748.4L161.2 744.0L158.8 741.4L153.3 739.8L148.6 740.8L143.7 739.6L143.0 735.6L147.9 735.0L150.0 731.1L152.8 731.7L154.7 726.9L154.4 721.2L151.2 716.0L147.6 715.0L143.2 716.0L139.2 721.1L132.7 721.0L122.1 716.8L119.4 711.2L118.2 705.1L119.6 699.8L116.5 699.7L114.7 702.5L110.5 699.6L103.5 699.9L101.1 703.1L97.8 703.0L92.2 707.9L93.1 711.4L89.2 715.3L89.4 719.7L81.7 718.9L74.9 721.6L78.0 724.5L73.1 726.3L71.2 729.2L68.4 725.3L64.0 723.7L60.0 728.7L64.0 732.2L61.1 735.1L50.1 733.8L48.7 742.5L52.3 744.5L58.1 752.0L61.8 753.4L64.6 752.2L67.7 755.1L67.0 760.2L69.6 764.2L60.4 763.5L61.4 760.6L60.6 755.4L56.9 751.2L54.1 751.8L52.5 757.3L55.7 765.6L60.9 769.7L62.7 777.7L65.3 776.2L68.2 771.3L74.9 768.3L79.1 768.4L80.7 772.0L76.6 777.6L79.3 780.5L87.8 774.7L88.5 768.4L86.9 764.6L82.2 763.5L77.9 765.5L81.2 757.5L76.8 749.9L81.0 746.5L88.2 747.6L90.6 750.5L91.5 759.5L99.2 767.0L100.2 769.1L98.3 774.1L93.6 778.7L101.4 777.1L98.1 782.7L98.1 788.9L93.6 795.1L91.3 800.6L87.8 804.6L86.4 808.3L82.4 807.9L79.1 810.4L78.7 814.9L81.0 820.2L78.7 828.6L82.9 832.8L86.8 839.6L84.7 849.3L80.0 854.8L80.7 860.3L92.4 861.0L96.4 866.3L101.4 864.8L102.5 859.7L98.3 857.1L95.7 850.1L96.0 845.2L101.6 833.1L108.1 833.4L109.1 839.3L101.3 838.6L99.0 840.9L104.1 843.2L104.6 848.5L106.7 849.9L109.1 856.5L105.6 873.2L115.3 869.2L119.3 864.0L121.9 862.5L124.0 856.3L119.6 854.2L121.7 849.6L126.3 847.8L129.2 848.7L131.9 853.1L136.4 851.4L138.8 840.9L140.8 836.9L142.0 830.2L140.6 823.3L149.7 792.2L152.3 790.7L150.9 787.4ZM298.0 706.3L296.6 703.5L298.4 698.9L293.3 693.7L294.9 683.9L293.3 682.1L286.0 683.5L277.1 678.4L275.1 674.7L272.0 672.9L268.5 675.1L262.0 673.4L250.0 682.1L247.0 682.0L246.8 692.3L240.9 698.1L231.6 696.6L222.2 700.0L220.3 699.0L217.5 692.9L213.8 688.5L212.1 691.9L204.9 696.2L204.2 701.4L202.1 701.8L200.4 713.0L196.7 716.4L191.8 718.5L187.4 723.9L186.0 728.0L187.8 737.7L193.5 741.5L189.9 751.9L191.8 756.4L190.4 760.0L197.6 761.5L201.9 761.4L197.7 768.0L201.9 768.6L206.8 771.6L211.9 769.3L216.1 763.9L215.7 759.0L217.0 754.6L220.8 753.1L223.9 747.8L228.3 742.9L228.3 736.4L231.1 733.5L236.2 732.4L238.6 728.7L245.4 725.1L251.9 723.8L261.0 726.4L265.7 731.1L269.7 737.1L273.7 741.1L276.4 728.3L283.4 718.6L296.1 708.9L298.0 706.3ZM236.5 669.2L238.8 670.6L250.0 664.5L255.9 668.2L261.5 668.9L262.9 665.6L266.8 662.2L273.2 659.1L276.5 652.9L280.4 653.7L286.7 650.4L298.4 649.4L305.0 652.7L311.1 657.4L315.3 658.5L323.4 656.7L329.7 653.4L332.6 656.5L333.0 663.6L328.6 670.3L323.2 675.4L318.1 676.9L316.0 680.0L319.7 682.3L322.2 687.9L317.6 691.9L320.6 695.4L316.7 697.3L316.9 701.7L320.6 703.5L322.7 707.1L329.7 711.3L329.0 715.8L334.7 722.9L344.0 726.3L350.3 727.1L356.1 724.3L359.7 720.4L365.0 705.2L366.7 702.5L371.3 700.8L374.9 697.7L375.3 695.0L372.3 691.9L377.2 689.5L376.2 686.8L386.1 681.2L393.5 678.9L401.8 677.3L405.0 675.4L406.6 670.6L394.5 662.8L389.3 660.2L386.8 655.2L387.5 650.1L391.5 644.8L393.6 636.9L396.8 634.4L404.3 633.4L401.5 639.7L401.8 643.7L406.0 649.5L407.3 644.3L411.1 649.0L418.4 649.0L421.1 647.1L424.6 648.2L425.3 651.8L418.3 656.6L412.7 657.2L410.9 661.2L417.0 660.6L430.8 656.0L443.4 655.8L448.7 657.6L453.6 656.0L461.1 656.7L467.9 659.9L469.1 653.2L475.2 646.5L476.5 641.0L483.6 637.2L485.5 630.2L492.5 627.7L497.8 628.7L502.8 634.2L496.9 634.4L494.8 652.2L496.2 657.2L499.2 660.2L506.5 655.0L511.6 645.4L514.0 643.7L513.7 638.0L511.4 636.1L511.6 629.4L514.4 621.9L518.6 618.9L527.3 616.9L532.9 617.9L539.5 624.4L542.5 623.6L542.9 620.1L538.8 617.4L539.2 613.4L542.0 608.2L545.5 605.3L544.6 600.0L546.4 597.7L550.7 599.1L553.3 595.7L559.6 599.7L559.3 603.4L556.1 607.5L550.9 610.6L546.2 617.0L548.5 618.4L549.3 622.5L547.2 624.1L548.5 631.9L545.8 637.6L548.1 642.0L552.3 641.6L555.3 634.8L560.7 631.5L562.3 628.6L567.3 629.2L571.3 628.2L574.8 624.2L575.9 617.9L574.5 613.1L576.4 606.5L579.2 602.1L587.9 594.7L590.7 595.1L596.7 591.4L587.1 575.2L583.9 566.3L583.2 559.0L586.2 554.2L585.3 550.0L586.7 543.6L589.5 539.0L591.8 529.9L596.3 521.5L600.7 519.7L603.2 515.9L604.7 508.0L604.7 502.4L606.3 493.4L605.8 477.2L604.0 468.0L601.1 462.7L600.7 453.0L603.7 443.6L606.8 439.3L608.2 434.3L621.5 431.9L627.1 436.6L629.9 434.4L627.1 430.2L630.9 424.9L627.1 421.8L632.2 412.9L630.1 409.2L632.9 406.8L637.9 398.4L646.7 392.3L648.8 378.3L652.1 376.3L650.0 372.9L651.4 369.4L656.3 363.6L654.7 359.3L651.9 357.1L653.3 350.8L650.2 340.1L650.5 336.2L645.8 332.7L646.8 327.6L645.3 322.4L639.3 311.2L634.6 305.9L629.5 303.7L625.5 295.8L623.9 287.0L623.1 274.2L623.2 266.3L624.8 257.2L626.6 253.4L617.7 254.8L613.8 252.7L609.6 248.2L604.5 246.8L600.7 244.0L596.3 250.9L593.0 264.2L594.6 268.2L603.3 264.2L607.2 265.0L614.3 260.1L617.8 266.7L616.3 269.6L615.4 276.8L613.3 281.3L609.8 283.6L603.3 279.9L601.9 276.6L598.6 275.5L598.1 281.1L594.6 285.7L589.9 284.8L588.5 282.2L586.4 270.4L587.1 265.7L584.6 262.8L579.2 265.0L572.4 260.0L570.3 269.4L571.5 274.3L570.1 283.5L568.4 288.3L561.7 291.3L558.1 289.9L550.9 297.4L553.0 303.3L553.2 310.9L557.0 314.7L554.7 328.4L551.1 334.9L547.2 338.4L541.1 336.7L544.1 344.5L549.9 342.4L554.2 343.2L557.2 346.6L558.6 352.3L558.1 365.7L555.6 376.3L552.5 378.8L550.6 388.0L544.8 406.9L542.0 411.3L536.4 417.1L531.2 428.7L529.8 433.5L528.2 445.9L522.1 453.4L517.7 456.6L510.2 459.2L500.4 466.3L498.0 470.4L495.9 478.0L490.8 484.6L486.8 491.8L480.0 496.7L474.5 502.2L466.7 506.3L463.5 505.7L461.3 508.2L453.7 512.5L443.3 516.8L434.3 518.7L430.8 520.7L428.8 528.0L426.3 530.2L417.7 530.3L410.4 525.9L409.5 523.8L412.8 518.0L412.8 511.2L408.3 512.9L404.1 511.8L404.3 507.3L406.7 502.7L410.9 504.9L415.5 499.0L421.4 498.4L423.0 496.4L422.5 490.2L427.2 489.2L424.6 484.1L415.6 486.8L407.1 492.1L402.5 492.1L398.0 494.5L397.3 498.9L394.7 504.1L396.6 507.4L396.4 511.4L398.9 517.2L398.5 523.8L392.8 536.2L382.4 550.0L378.4 554.1L368.1 562.6L363.7 569.4L359.6 577.7L361.3 582.9L366.5 589.4L359.6 592.3L359.2 598.2L354.7 601.3L347.3 602.3L348.2 606.5L344.3 607.1L337.9 606.1L336.5 602.5L325.8 602.6L324.8 598.6L327.9 594.7L325.3 590.5L317.1 591.6L309.6 597.5L301.7 596.0L290.7 595.7L278.8 600.9L276.0 603.2L266.2 604.8L251.6 605.8L244.2 604.0L237.4 606.5L236.4 608.6L228.8 606.2L227.6 602.2L223.6 602.3L221.1 600.2L214.5 605.0L208.0 605.6L200.0 612.0L199.7 616.3L197.6 618.9L193.4 620.5L187.2 625.5L182.9 632.3L178.0 635.2L170.5 641.6L167.3 645.7L161.4 650.4L160.5 653.1L150.7 656.8L147.9 656.4L144.3 662.9L140.9 664.9L139.0 670.6L134.6 672.4L125.7 673.3L117.7 669.7L114.0 674.7L112.6 679.3L115.3 685.0L112.3 689.2L114.7 692.8L115.6 699.2L120.7 693.2L124.0 694.2L128.0 700.0L132.2 700.4L136.2 696.6L140.1 697.2L142.9 694.3L147.4 694.4L154.9 692.7L175.4 705.5L174.0 699.7L177.8 696.6L177.3 689.5L179.0 687.5L178.3 681.7L182.7 676.3L186.0 674.0L191.6 674.2L192.0 678.8L194.6 682.9L199.3 684.0L208.0 677.4L217.0 676.6L222.0 672.9L222.5 676.9L227.1 673.4L232.5 675.1L236.5 669.2ZM835.7 132.8L831.4 133.1L821.2 140.8L814.1 139.4L813.6 134.0L808.3 119.2L802.2 110.8L803.6 103.2L806.7 96.9L811.1 91.9L812.0 88.0L815.5 83.3L816.7 78.5L815.1 75.2L808.3 83.7L800.8 88.7L790.3 99.5L785.9 101.1L777.7 100.5L768.3 98.6L765.5 96.5L760.4 89.3L758.0 94.5L755.0 94.1L755.7 88.2L749.9 88.0L746.6 90.0L739.5 89.9L734.4 85.1L720.6 76.7L718.5 73.1L707.1 66.2L700.5 60.9L687.6 47.6L682.7 41.8L679.0 34.9L663.6 18.0L655.6 11.9L650.2 4.7L644.2 10.6L637.9 11.8L632.7 20.9L632.9 26.1L639.3 38.7L642.3 50.1L642.8 60.1L640.5 70.6L636.2 79.4L636.9 92.0L635.5 99.8L629.9 105.5L623.8 107.8L620.6 113.2L623.2 121.2L622.4 126.2L625.7 131.6L624.8 136.9L622.4 141.0L615.4 146.8L612.6 147.6L605.4 145.5L603.9 142.4L595.1 144.4L589.2 141.1L579.4 133.7L576.9 136.3L573.3 136.5L572.2 143.3L577.1 148.0L581.3 155.1L574.8 161.5L568.4 170.4L565.6 167.1L562.4 171.2L556.5 175.1L549.9 176.2L547.8 180.7L548.5 187.8L544.4 197.3L546.0 201.9L550.2 204.3L552.3 207.7L558.8 211.2L563.1 221.1L562.1 226.6L556.7 234.2L554.9 242.4L557.7 249.4L565.9 251.9L569.1 247.1L575.2 245.2L577.3 242.2L577.8 235.1L585.2 231.9L587.8 226.4L593.4 229.7L602.5 232.7L606.5 232.6L613.3 226.9L608.4 223.1L603.2 221.1L597.2 215.4L593.4 209.9L589.5 208.5L582.4 209.7L576.4 204.4L569.9 200.5L569.8 195.0L571.5 190.0L578.0 182.1L581.3 181.1L591.4 182.1L603.7 195.6L617.1 187.9L625.2 182.1L630.9 179.9L639.5 179.0L649.3 182.5L655.9 187.8L661.0 188.4L666.6 194.0L675.1 199.8L679.3 201.0L689.7 206.5L699.4 209.7L707.0 214.3L712.4 220.0L716.2 214.4L717.8 208.3L717.3 202.2L718.3 196.8L729.3 179.8L739.8 170.6L744.5 165.3L752.0 160.4L758.9 157.4L767.4 156.0L769.0 158.6L774.1 160.0L779.1 159.0L785.9 160.5L785.8 156.5L788.7 153.2L792.1 156.7L799.2 156.6L803.2 153.4L805.2 148.3L813.2 145.6L823.7 145.5L826.7 140.1L829.8 137.2L835.4 135.8L835.7 132.8ZM90.3 785.3L88.0 784.3L80.7 789.8L82.0 792.2L87.6 790.5L90.3 785.3ZM78.2 783.2L72.4 784.8L69.1 794.7L71.2 798.4L71.0 804.6L76.6 800.4L80.3 795.7L80.1 787.2L78.2 783.2ZM16.0 775.5L14.2 770.5L11.1 769.4L7.3 771.4L2.4 779.2L9.0 779.8L16.9 777.5L16.0 775.5ZM545.7 747.9L546.2 753.1L549.9 750.7L545.7 747.9ZM26.7 756.7L25.1 754.9L21.2 759.3L26.7 760.8L26.7 756.7ZM48.8 731.4L43.1 738.2L40.1 743.1L41.9 745.3L45.7 741.3L49.2 734.0L48.8 731.4ZM59.5 709.6L59.2 705.3L55.8 704.3L53.7 707.0L53.7 711.4L56.4 713.9L59.5 709.6ZM178.9 703.9L183.2 702.2L179.7 699.0L176.6 700.8L178.9 703.9ZM194.4 691.7L193.9 685.4L189.5 690.7L194.4 691.7ZM37.0 679.2L34.5 677.6L31.4 679.6L30.1 689.6L35.2 688.3L37.0 679.2ZM313.2 659.5L307.5 664.2L303.3 669.1L296.8 680.1L300.0 684.5L311.1 679.8L308.2 675.0L308.3 670.9L312.4 665.7L314.5 661.2L313.2 659.5ZM43.8 658.8L37.5 657.1L37.7 663.9L35.2 668.2L35.0 673.5L40.5 673.0L40.3 668.8L43.4 665.1L45.0 660.7L43.8 658.8ZM527.5 649.2L524.5 648.2L524.7 653.8L529.2 655.3L527.5 649.2ZM233.9 559.5L230.2 555.5L226.2 558.2L225.2 563.1L231.5 566.5L234.4 563.5L233.9 559.5ZM481.0 451.8L484.0 437.5L473.8 446.0L471.0 450.6L470.0 455.6L475.4 458.0L472.6 461.7L471.6 468.1L476.6 466.3L482.4 462.5L486.2 455.0L486.6 451.5L481.0 451.8ZM534.0 201.4L529.2 203.1L527.1 206.7L528.4 212.2L532.0 210.0L534.0 201.4ZM620.3 25.7L614.2 21.0L610.7 23.4L611.5 27.2L615.7 29.9L620.3 25.7ZM282.3 662.8L274.4 665.3L278.3 668.8L282.5 666.9L282.3 662.8Z"/>
+    <path class="rail" d="M96.7 841.0L96.6 841.0L95.8 840.8L94.7 840.1L93.3 839.5L91.3 838.0L89.1 835.5L88.5 834.8L88.0 833.7L86.4 829.1L85.8 828.0L85.6 827.2L85.5 827.1L85.3 826.0L84.5 823.9L84.5 822.5L85.2 817.1L85.5 816.5L88.0 812.2L88.1 811.4L87.8 810.7L87.8 810.6L87.5 809.7L87.6 808.7L88.5 806.4L89.9 804.7L91.2 803.4L91.2 803.3L92.6 801.7L93.1 801.3L94.6 800.6L95.5 799.9L99.3 795.4L100.4 794.1L100.8 793.1L100.9 792.4L100.7 791.1L100.3 789.6L100.6 788.4L101.1 787.5L101.3 786.7L101.2 785.0L101.2 784.9L100.7 783.1L101.1 782.0L102.6 779.2L102.9 778.1L102.5 776.9L102.5 776.0L102.8 774.9L103.8 768.6L103.8 768.5L104.0 768.3L104.3 766.6L103.3 764.4L102.9 763.8L99.7 760.5L98.3 759.5L98.2 759.4L96.4 756.9L94.6 753.6L94.1 751.8L94.1 751.7L94.0 750.5L94.4 747.4L94.3 745.4L94.3 745.3L94.7 742.4L94.8 740.2L94.8 737.7L94.7 736.8L94.7 736.7L94.5 736.1L94.5 734.7L94.2 733.8L94.2 733.7L93.6 732.6L92.5 731.0L92.1 730.0L92.0 728.4L92.1 727.1L91.4 724.4L91.4 723.8L91.6 722.5L90.9 721.3L90.8 720.7L90.8 720.5M337.5 652.0L337.3 652.0L337.1 652.1L337.3 652.0L337.5 651.9M90.8 720.7L90.8 720.5L90.9 719.8L91.3 719.2L92.7 718.2L93.8 717.0L95.5 715.4L98.7 713.3L99.5 712.5L100.3 712.0L102.2 711.3L103.5 709.9L104.3 709.3L105.6 708.8L106.0 708.5L107.6 706.3L108.7 705.3L110.3 704.1L111.6 702.9L112.5 702.6L113.2 702.7L113.4 702.8L113.9 703.0L115.0 703.0L115.7 702.9L116.3 702.4L117.5 700.9L117.9 700.2L117.6 698.9L116.6 697.2L116.4 696.5L116.4 695.7L116.5 695.5L116.7 694.4L117.5 693.0L118.4 692.3L120.2 691.6L121.1 691.5L124.9 692.0L126.6 692.8L126.8 692.9L128.4 693.4L130.5 693.8L131.4 693.7L132.4 693.5L134.0 693.0L135.2 692.9L135.8 692.7L137.1 691.3L138.1 690.5L138.3 690.3L139.2 689.9L140.4 690.0L142.8 691.0L145.0 691.3L148.0 691.7L148.7 691.7L151.6 691.2L153.0 691.1L155.7 690.5L156.3 690.6L157.1 691.1L157.5 691.8L157.8 692.8L158.0 693.1L158.9 693.7L159.6 694.0L161.7 693.9L164.4 693.5L165.7 692.5L166.5 692.0L168.0 690.9L169.1 690.4L171.7 689.7L172.6 689.4L173.4 688.6L174.7 686.2L174.8 686.0L176.6 682.2L177.0 681.7L179.6 679.1L181.0 677.9L181.6 677.1L182.9 674.7L183.5 673.5L184.2 672.5L185.2 672.1L186.9 671.7L189.5 671.4L190.5 672.0L190.6 672.2L191.1 672.4L191.4 672.4L191.4 672.4L192.8 672.9L194.8 673.1L197.8 675.1L199.0 675.4L200.9 675.2L202.6 674.2L204.3 672.7L204.4 672.6L205.5 671.8L206.9 671.4L210.8 671.5L214.5 670.9L215.7 671.0L217.4 671.9L218.7 672.1L219.9 671.9L220.2 672.0L221.9 671.8L225.1 670.2L225.3 670.2L226.1 669.7L227.9 668.5L231.4 667.1L232.4 666.8L233.4 666.7L233.7 666.6L234.1 666.5L234.6 666.5L236.5 666.1L238.1 665.0L239.2 664.6L240.2 664.3L241.7 664.1L242.8 663.9L244.9 662.9L247.5 663.0L248.9 662.2L249.0 662.0L249.7 661.3L250.3 660.3L252.3 658.5L253.0 658.1L256.5 656.9L260.1 656.4L260.5 656.1L260.6 656.0L261.0 655.2L261.2 655.1L263.9 654.9L264.8 654.5L266.1 653.7L267.7 653.0L270.5 652.2L272.8 651.2L273.6 650.9L275.9 650.7L279.0 649.5L279.7 649.3L281.7 649.2L283.3 648.7L285.8 647.1L286.6 646.9L287.5 646.9L287.7 646.9L289.5 646.8L291.8 646.2L293.4 646.3L295.5 646.1L298.0 646.4L298.2 646.4L299.9 646.8L300.7 647.4L301.7 648.6L303.9 650.5L307.4 653.5L308.2 654.0L310.0 655.7L311.1 656.0L311.2 656.0L313.2 656.1L317.0 655.1L319.9 654.3L322.6 653.6L322.7 653.5L323.9 652.2L324.7 651.6L328.3 650.2L329.1 650.0L330.3 650.1L332.5 649.9L333.9 650.2L334.6 651.0L335.2 652.3L335.9 652.6L337.1 652.1M191.1 672.4L191.4 672.4L191.4 672.4M544.5 595.0L544.5 595.2L544.1 595.9L543.9 597.0L543.8 597.1L543.4 597.3L543.2 598.1L543.2 598.3L542.0 600.3L539.5 601.3L539.5 602.0L537.8 605.0L537.3 605.5L537.1 605.6L535.9 606.8L534.6 607.3L532.6 608.8L529.6 610.2L524.8 612.9L522.9 614.6L521.3 616.5L520.2 617.3L518.4 617.9L516.1 619.2L514.8 620.6L514.7 620.7L514.3 621.5L514.0 622.4L513.8 624.4L513.2 625.7L511.8 627.5L511.1 629.7L511.0 629.8L510.3 630.0L506.1 629.5L504.9 629.0L504.1 628.5L503.0 628.4L502.8 628.4L501.4 628.6L499.4 628.4L497.9 627.4L495.8 626.7L495.3 626.6L492.5 627.0L491.0 627.5L490.8 627.5L488.4 627.9L486.1 629.2L485.6 629.5L484.6 630.8L482.9 633.3L482.1 634.0L480.8 635.3L478.4 637.2L477.7 637.6L477.5 637.8L476.6 638.8L476.3 640.1L475.9 641.1L474.4 643.0L473.4 643.9L468.9 647.6L468.5 647.9L463.9 649.5L462.5 649.7L461.3 649.7L460.7 649.5L459.6 649.8L459.3 649.9L458.1 650.2L455.9 651.2L454.0 652.3L452.6 653.4L450.8 653.8L449.9 653.8L448.3 653.5L447.1 653.5L446.0 653.7L445.8 653.8L445.1 654.4L443.4 654.3L441.5 654.8L440.1 654.8L439.0 654.4L437.5 654.3L436.3 653.8L430.5 652.2L429.4 651.3L428.7 650.3L428.6 650.1L428.3 649.5L427.6 648.9L425.8 647.9L424.9 647.3L423.2 647.1L422.2 646.7L421.4 646.0L418.4 644.6L417.9 644.3L413.2 638.0L413.0 637.7L412.1 636.7L408.4 633.6L407.9 633.0L406.5 630.1L406.1 629.6L404.9 628.8L404.6 628.0L404.7 627.1L404.4 625.9L404.4 625.7L403.8 624.8L403.5 624.1L402.0 622.6L400.6 622.3L399.6 621.7L398.9 620.9L397.8 619.0L397.3 618.6L395.6 617.7L395.0 617.1L394.8 617.0L393.9 616.0L392.5 615.3L388.9 615.0L388.2 614.8L387.0 614.0L385.9 613.9L384.8 614.4L383.9 614.6L381.1 614.3L379.3 614.0L377.2 614.7L376.5 615.1L376.0 615.9L375.7 617.0L375.7 617.2L375.4 618.2L375.1 620.5L374.3 622.2L372.5 624.6L371.2 626.7L370.8 627.2L369.5 628.1L365.4 630.2L364.5 630.8L363.1 631.9L362.5 632.5L360.8 634.6L359.8 636.0L358.4 637.5L357.8 637.8L356.9 637.8L355.4 637.5L352.9 637.1L350.0 636.9L349.8 636.9L348.8 637.0L348.2 637.4L347.8 638.5L347.8 640.6L347.4 641.4L346.6 642.0L344.7 644.2L342.5 647.7L339.9 650.4L339.1 651.1L338.2 651.3L337.6 651.9L337.5 651.9L337.3 652.0M402.9 625.3L403.4 624.8L403.8 624.8M337.3 652.0L337.5 652.0L337.6 651.9M510.4 461.2L510.1 461.3L509.5 461.6L508.3 463.1L508.0 463.8L507.0 466.7L506.7 467.7L506.1 472.4L505.8 473.5L504.3 477.0L504.2 477.2L503.8 478.4L501.6 484.6L500.2 489.0L500.1 489.2L500.0 489.8L499.8 492.4L499.4 495.8L499.7 497.0L503.3 503.9L503.5 504.8L503.5 505.8L503.5 506.1L503.3 507.2L503.0 507.7L500.8 510.1L500.4 510.7L497.8 515.4L497.0 517.0L497.0 517.9L497.2 518.5L497.9 519.7L497.9 519.8L498.1 520.0L498.7 520.8L499.6 522.8L500.4 523.7L504.7 527.6L505.3 528.5L505.5 529.3L505.6 530.8L506.1 534.3L506.2 534.5L506.2 534.9L506.3 535.8L505.7 539.2L505.6 540.2L505.9 545.1L506.9 553.8L507.3 554.7L507.8 555.8L507.9 556.5L507.9 556.7L508.1 557.7L508.9 558.6L511.0 559.7L513.9 561.6L515.9 562.8L516.1 562.9L521.6 566.3L522.6 566.7L524.8 567.0L526.1 567.6L526.2 567.7L529.4 569.2L532.7 571.6L536.9 575.7L537.5 576.7L537.6 577.5L537.2 580.0L537.5 581.5L537.5 581.7M544.5 595.2L544.5 595.0L545.0 593.3L545.0 593.1L545.2 592.9L544.1 591.6L543.3 591.0L542.6 590.2L542.1 589.0L540.6 588.3L540.4 587.8L539.2 586.2L538.7 585.3L538.1 584.6L537.6 583.0L537.8 582.5L537.5 581.7L537.5 581.5L537.2 580.0L537.6 577.5L538.0 576.5L539.1 574.6L540.1 572.3L542.0 568.3L543.2 565.1L544.9 559.7L546.3 557.3L546.4 557.1L548.9 551.8L549.1 551.3L549.8 546.7L550.5 544.4L550.8 542.6L550.9 542.4L551.2 540.1L551.9 534.0L553.5 529.0L554.1 524.9L554.4 524.3L556.3 520.9L556.7 520.2L556.9 520.0L558.2 518.5L560.1 515.8L562.1 512.4L564.9 508.7L565.0 508.5L569.1 503.2L573.3 496.3L574.4 493.3L574.6 492.2L574.7 492.0L575.3 489.5L576.7 485.2L578.5 481.2L578.6 480.6L578.9 476.7L578.8 476.0L577.9 474.1L577.8 473.2L578.1 470.9L578.1 470.7L578.1 470.4L578.3 469.4L580.0 466.1L581.9 463.1L586.5 456.4L586.6 456.2L587.1 455.5L589.2 453.5L597.8 445.6L598.4 444.6L598.6 443.4L598.9 442.1L599.2 441.6L598.6 440.5L598.6 440.3L599.2 439.9L600.2 439.6L601.9 438.3L602.7 437.1L602.8 436.4L602.4 427.2L602.3 426.4L602.5 423.4L602.8 421.8L602.8 421.7L603.0 420.8L604.7 417.9L607.8 411.2L607.9 411.0L608.8 408.8L609.5 405.8L610.2 403.2L611.1 400.5L611.1 400.3L612.0 397.4L613.8 391.4L613.9 390.4L613.7 388.1L613.5 387.4L613.5 387.2L613.1 386.0L612.8 385.4L610.1 382.0L609.8 380.8L610.2 379.2L610.3 379.0L611.1 377.5L612.7 371.7L612.8 371.5L612.9 370.7L612.7 364.8L612.1 362.9L611.4 358.4L611.6 355.3L611.0 354.0L610.9 353.8L610.7 353.6L610.1 353.0L610.1 352.4L611.3 349.6L611.6 348.5L613.2 345.9L614.8 341.0L615.0 340.3L614.9 338.4L614.9 338.3L615.2 336.9L616.3 335.5L616.5 334.8L617.7 327.8L617.7 326.8L617.3 323.4L617.3 322.7L617.7 321.5L618.2 320.5L618.2 320.3L618.5 319.6L618.4 318.1L618.6 317.2L623.5 309.2L624.2 307.1L625.2 305.5L625.3 305.4L625.7 304.8L626.0 303.9L625.8 302.8L625.2 301.9L623.9 300.9L620.7 298.5L617.5 295.8L616.9 295.3L613.6 293.6L611.9 292.8L611.7 292.8L611.0 292.4L609.5 291.3L608.6 290.7L607.4 290.4L599.1 288.8L597.2 288.8L596.3 289.1L594.2 290.0L593.2 290.2L591.0 289.6L590.3 289.2L589.6 288.3L589.4 287.5L589.5 286.4L589.5 286.2M507.9 556.7L507.9 556.5L507.8 555.8L507.3 554.7L505.9 553.5L504.5 553.2L501.8 553.9L500.0 554.2L499.9 554.3L498.7 553.8L497.8 552.8L496.9 552.4L493.7 552.1L492.9 552.3L491.6 553.0L491.2 553.5L490.4 555.1L489.6 555.4L489.4 555.4L488.1 555.4L486.6 555.7L485.7 556.1L484.6 557.1L483.4 557.8L482.1 558.8L481.3 559.3L481.2 559.3L480.3 559.7L478.9 559.3L475.5 556.7L472.7 554.8L472.0 554.0L471.5 553.0L470.9 552.3L470.8 552.2L469.8 551.4L469.2 550.5L468.8 548.8L468.5 548.0L465.6 544.8L465.1 543.7L465.1 542.3L465.9 539.8L466.2 538.6L467.1 537.8L467.8 537.5L467.9 537.4L470.9 535.0L471.9 533.9L473.5 532.7L474.2 532.3L475.0 531.2L475.3 529.8L475.7 529.1L476.7 527.9L476.8 527.4L476.7 526.1L476.2 525.4L476.1 525.2L473.6 521.6L473.2 520.1L473.1 517.9L473.4 515.2L473.2 514.1L472.1 512.4L470.8 511.2L470.7 511.1L469.6 510.0L468.2 509.3L467.1 509.4L461.5 510.5L457.9 511.0L456.5 511.3L454.8 512.6L452.1 513.4L451.9 513.4L449.0 514.9L447.4 515.3L446.0 515.9L441.5 517.7L435.3 521.5L434.8 522.0L433.6 523.5L433.5 523.6L432.2 525.3L430.9 528.3L430.1 529.2L428.1 530.6L425.8 532.7L424.4 533.3L422.4 532.9L421.8 533.3L421.5 533.9L420.6 534.0L420.4 533.9L419.4 533.1L418.4 532.8L415.1 532.3L414.6 532.3L412.9 532.8L410.8 532.4L410.7 532.4L409.6 532.6L408.2 533.3L406.6 534.4L405.5 535.3L404.8 535.8L403.5 535.8L401.8 535.2L400.5 535.0L399.3 535.1L398.4 535.9L397.9 536.7L396.7 537.9L395.6 538.7L394.1 540.6L393.1 541.2L393.0 541.4L392.6 542.1L391.8 542.8L389.4 544.3L388.6 544.7L386.7 546.3L385.9 547.6L385.1 549.1L384.2 550.1L383.8 550.7L383.6 551.8L383.6 551.9L383.6 552.6L382.7 554.8L382.2 555.4L381.3 556.2L380.7 556.5L378.7 556.8L378.6 556.8L377.8 557.1L376.6 558.6L374.3 560.4L373.8 560.8L373.3 561.9L373.1 563.0L373.1 563.2L373.1 563.6L373.9 566.5L373.9 567.4L373.5 568.4L373.5 570.4L372.5 572.2L372.4 572.4L372.2 572.8L372.3 574.2L372.5 575.2L372.1 577.1L372.1 579.7L371.5 581.1L371.3 582.2L371.3 582.3L370.9 583.8L369.8 585.9L367.1 594.6L366.4 596.3L365.5 597.2L365.3 597.4M589.5 286.4L589.5 286.2L589.3 285.4L588.7 284.5L586.8 280.2L586.3 278.2L585.9 277.1L583.6 273.1L583.0 271.8L581.4 268.2L580.9 267.4L580.8 267.3L579.9 266.2L579.2 265.8L576.6 264.8L574.1 263.0L573.1 261.9L572.7 260.7L572.7 258.6L572.2 257.3L570.5 254.8L567.5 249.6L567.0 248.2L567.2 247.0L567.9 245.6L570.7 241.3L571.6 240.3L574.4 238.1L576.2 236.1L576.8 235.3L576.9 235.2L579.0 232.9L580.2 231.5L581.3 230.8L582.8 230.1L583.4 229.6L584.1 228.8L584.9 227.4L585.9 226.4L588.3 224.7L588.9 223.8L588.8 222.8L588.4 222.2L587.4 221.7L587.2 221.7M64.0 770.9L64.0 770.8L64.2 770.1L65.2 769.1L66.1 768.8L67.9 768.6L69.2 768.2L71.0 767.0L71.7 766.3L72.3 765.3L72.4 764.9L72.4 764.8L71.9 763.5L71.4 763.0L70.0 762.3L69.4 761.8L68.6 760.8L68.3 760.1L68.3 760.0L67.8 758.8L67.9 757.5L68.3 756.6L68.4 755.6L68.1 754.2L68.1 753.1L68.6 752.1L69.6 751.2L70.2 750.4L70.3 749.7L70.3 749.6L70.1 748.0L70.1 746.9L70.3 745.8L70.7 745.0L71.5 744.3L71.5 744.2"/>
+    <path class="rail-core" d="M96.7 841.0L96.6 841.0L95.8 840.8L94.7 840.1L93.3 839.5L91.3 838.0L89.1 835.5L88.5 834.8L88.0 833.7L86.4 829.1L85.8 828.0L85.6 827.2L85.5 827.1L85.3 826.0L84.5 823.9L84.5 822.5L85.2 817.1L85.5 816.5L88.0 812.2L88.1 811.4L87.8 810.7L87.8 810.6L87.5 809.7L87.6 808.7L88.5 806.4L89.9 804.7L91.2 803.4L91.2 803.3L92.6 801.7L93.1 801.3L94.6 800.6L95.5 799.9L99.3 795.4L100.4 794.1L100.8 793.1L100.9 792.4L100.7 791.1L100.3 789.6L100.6 788.4L101.1 787.5L101.3 786.7L101.2 785.0L101.2 784.9L100.7 783.1L101.1 782.0L102.6 779.2L102.9 778.1L102.5 776.9L102.5 776.0L102.8 774.9L103.8 768.6L103.8 768.5L104.0 768.3L104.3 766.6L103.3 764.4L102.9 763.8L99.7 760.5L98.3 759.5L98.2 759.4L96.4 756.9L94.6 753.6L94.1 751.8L94.1 751.7L94.0 750.5L94.4 747.4L94.3 745.4L94.3 745.3L94.7 742.4L94.8 740.2L94.8 737.7L94.7 736.8L94.7 736.7L94.5 736.1L94.5 734.7L94.2 733.8L94.2 733.7L93.6 732.6L92.5 731.0L92.1 730.0L92.0 728.4L92.1 727.1L91.4 724.4L91.4 723.8L91.6 722.5L90.9 721.3L90.8 720.7L90.8 720.5M337.5 652.0L337.3 652.0L337.1 652.1L337.3 652.0L337.5 651.9M90.8 720.7L90.8 720.5L90.9 719.8L91.3 719.2L92.7 718.2L93.8 717.0L95.5 715.4L98.7 713.3L99.5 712.5L100.3 712.0L102.2 711.3L103.5 709.9L104.3 709.3L105.6 708.8L106.0 708.5L107.6 706.3L108.7 705.3L110.3 704.1L111.6 702.9L112.5 702.6L113.2 702.7L113.4 702.8L113.9 703.0L115.0 703.0L115.7 702.9L116.3 702.4L117.5 700.9L117.9 700.2L117.6 698.9L116.6 697.2L116.4 696.5L116.4 695.7L116.5 695.5L116.7 694.4L117.5 693.0L118.4 692.3L120.2 691.6L121.1 691.5L124.9 692.0L126.6 692.8L126.8 692.9L128.4 693.4L130.5 693.8L131.4 693.7L132.4 693.5L134.0 693.0L135.2 692.9L135.8 692.7L137.1 691.3L138.1 690.5L138.3 690.3L139.2 689.9L140.4 690.0L142.8 691.0L145.0 691.3L148.0 691.7L148.7 691.7L151.6 691.2L153.0 691.1L155.7 690.5L156.3 690.6L157.1 691.1L157.5 691.8L157.8 692.8L158.0 693.1L158.9 693.7L159.6 694.0L161.7 693.9L164.4 693.5L165.7 692.5L166.5 692.0L168.0 690.9L169.1 690.4L171.7 689.7L172.6 689.4L173.4 688.6L174.7 686.2L174.8 686.0L176.6 682.2L177.0 681.7L179.6 679.1L181.0 677.9L181.6 677.1L182.9 674.7L183.5 673.5L184.2 672.5L185.2 672.1L186.9 671.7L189.5 671.4L190.5 672.0L190.6 672.2L191.1 672.4L191.4 672.4L191.4 672.4L192.8 672.9L194.8 673.1L197.8 675.1L199.0 675.4L200.9 675.2L202.6 674.2L204.3 672.7L204.4 672.6L205.5 671.8L206.9 671.4L210.8 671.5L214.5 670.9L215.7 671.0L217.4 671.9L218.7 672.1L219.9 671.9L220.2 672.0L221.9 671.8L225.1 670.2L225.3 670.2L226.1 669.7L227.9 668.5L231.4 667.1L232.4 666.8L233.4 666.7L233.7 666.6L234.1 666.5L234.6 666.5L236.5 666.1L238.1 665.0L239.2 664.6L240.2 664.3L241.7 664.1L242.8 663.9L244.9 662.9L247.5 663.0L248.9 662.2L249.0 662.0L249.7 661.3L250.3 660.3L252.3 658.5L253.0 658.1L256.5 656.9L260.1 656.4L260.5 656.1L260.6 656.0L261.0 655.2L261.2 655.1L263.9 654.9L264.8 654.5L266.1 653.7L267.7 653.0L270.5 652.2L272.8 651.2L273.6 650.9L275.9 650.7L279.0 649.5L279.7 649.3L281.7 649.2L283.3 648.7L285.8 647.1L286.6 646.9L287.5 646.9L287.7 646.9L289.5 646.8L291.8 646.2L293.4 646.3L295.5 646.1L298.0 646.4L298.2 646.4L299.9 646.8L300.7 647.4L301.7 648.6L303.9 650.5L307.4 653.5L308.2 654.0L310.0 655.7L311.1 656.0L311.2 656.0L313.2 656.1L317.0 655.1L319.9 654.3L322.6 653.6L322.7 653.5L323.9 652.2L324.7 651.6L328.3 650.2L329.1 650.0L330.3 650.1L332.5 649.9L333.9 650.2L334.6 651.0L335.2 652.3L335.9 652.6L337.1 652.1M191.1 672.4L191.4 672.4L191.4 672.4M544.5 595.0L544.5 595.2L544.1 595.9L543.9 597.0L543.8 597.1L543.4 597.3L543.2 598.1L543.2 598.3L542.0 600.3L539.5 601.3L539.5 602.0L537.8 605.0L537.3 605.5L537.1 605.6L535.9 606.8L534.6 607.3L532.6 608.8L529.6 610.2L524.8 612.9L522.9 614.6L521.3 616.5L520.2 617.3L518.4 617.9L516.1 619.2L514.8 620.6L514.7 620.7L514.3 621.5L514.0 622.4L513.8 624.4L513.2 625.7L511.8 627.5L511.1 629.7L511.0 629.8L510.3 630.0L506.1 629.5L504.9 629.0L504.1 628.5L503.0 628.4L502.8 628.4L501.4 628.6L499.4 628.4L497.9 627.4L495.8 626.7L495.3 626.6L492.5 627.0L491.0 627.5L490.8 627.5L488.4 627.9L486.1 629.2L485.6 629.5L484.6 630.8L482.9 633.3L482.1 634.0L480.8 635.3L478.4 637.2L477.7 637.6L477.5 637.8L476.6 638.8L476.3 640.1L475.9 641.1L474.4 643.0L473.4 643.9L468.9 647.6L468.5 647.9L463.9 649.5L462.5 649.7L461.3 649.7L460.7 649.5L459.6 649.8L459.3 649.9L458.1 650.2L455.9 651.2L454.0 652.3L452.6 653.4L450.8 653.8L449.9 653.8L448.3 653.5L447.1 653.5L446.0 653.7L445.8 653.8L445.1 654.4L443.4 654.3L441.5 654.8L440.1 654.8L439.0 654.4L437.5 654.3L436.3 653.8L430.5 652.2L429.4 651.3L428.7 650.3L428.6 650.1L428.3 649.5L427.6 648.9L425.8 647.9L424.9 647.3L423.2 647.1L422.2 646.7L421.4 646.0L418.4 644.6L417.9 644.3L413.2 638.0L413.0 637.7L412.1 636.7L408.4 633.6L407.9 633.0L406.5 630.1L406.1 629.6L404.9 628.8L404.6 628.0L404.7 627.1L404.4 625.9L404.4 625.7L403.8 624.8L403.5 624.1L402.0 622.6L400.6 622.3L399.6 621.7L398.9 620.9L397.8 619.0L397.3 618.6L395.6 617.7L395.0 617.1L394.8 617.0L393.9 616.0L392.5 615.3L388.9 615.0L388.2 614.8L387.0 614.0L385.9 613.9L384.8 614.4L383.9 614.6L381.1 614.3L379.3 614.0L377.2 614.7L376.5 615.1L376.0 615.9L375.7 617.0L375.7 617.2L375.4 618.2L375.1 620.5L374.3 622.2L372.5 624.6L371.2 626.7L370.8 627.2L369.5 628.1L365.4 630.2L364.5 630.8L363.1 631.9L362.5 632.5L360.8 634.6L359.8 636.0L358.4 637.5L357.8 637.8L356.9 637.8L355.4 637.5L352.9 637.1L350.0 636.9L349.8 636.9L348.8 637.0L348.2 637.4L347.8 638.5L347.8 640.6L347.4 641.4L346.6 642.0L344.7 644.2L342.5 647.7L339.9 650.4L339.1 651.1L338.2 651.3L337.6 651.9L337.5 651.9L337.3 652.0M402.9 625.3L403.4 624.8L403.8 624.8M337.3 652.0L337.5 652.0L337.6 651.9M510.4 461.2L510.1 461.3L509.5 461.6L508.3 463.1L508.0 463.8L507.0 466.7L506.7 467.7L506.1 472.4L505.8 473.5L504.3 477.0L504.2 477.2L503.8 478.4L501.6 484.6L500.2 489.0L500.1 489.2L500.0 489.8L499.8 492.4L499.4 495.8L499.7 497.0L503.3 503.9L503.5 504.8L503.5 505.8L503.5 506.1L503.3 507.2L503.0 507.7L500.8 510.1L500.4 510.7L497.8 515.4L497.0 517.0L497.0 517.9L497.2 518.5L497.9 519.7L497.9 519.8L498.1 520.0L498.7 520.8L499.6 522.8L500.4 523.7L504.7 527.6L505.3 528.5L505.5 529.3L505.6 530.8L506.1 534.3L506.2 534.5L506.2 534.9L506.3 535.8L505.7 539.2L505.6 540.2L505.9 545.1L506.9 553.8L507.3 554.7L507.8 555.8L507.9 556.5L507.9 556.7L508.1 557.7L508.9 558.6L511.0 559.7L513.9 561.6L515.9 562.8L516.1 562.9L521.6 566.3L522.6 566.7L524.8 567.0L526.1 567.6L526.2 567.7L529.4 569.2L532.7 571.6L536.9 575.7L537.5 576.7L537.6 577.5L537.2 580.0L537.5 581.5L537.5 581.7M544.5 595.2L544.5 595.0L545.0 593.3L545.0 593.1L545.2 592.9L544.1 591.6L543.3 591.0L542.6 590.2L542.1 589.0L540.6 588.3L540.4 587.8L539.2 586.2L538.7 585.3L538.1 584.6L537.6 583.0L537.8 582.5L537.5 581.7L537.5 581.5L537.2 580.0L537.6 577.5L538.0 576.5L539.1 574.6L540.1 572.3L542.0 568.3L543.2 565.1L544.9 559.7L546.3 557.3L546.4 557.1L548.9 551.8L549.1 551.3L549.8 546.7L550.5 544.4L550.8 542.6L550.9 542.4L551.2 540.1L551.9 534.0L553.5 529.0L554.1 524.9L554.4 524.3L556.3 520.9L556.7 520.2L556.9 520.0L558.2 518.5L560.1 515.8L562.1 512.4L564.9 508.7L565.0 508.5L569.1 503.2L573.3 496.3L574.4 493.3L574.6 492.2L574.7 492.0L575.3 489.5L576.7 485.2L578.5 481.2L578.6 480.6L578.9 476.7L578.8 476.0L577.9 474.1L577.8 473.2L578.1 470.9L578.1 470.7L578.1 470.4L578.3 469.4L580.0 466.1L581.9 463.1L586.5 456.4L586.6 456.2L587.1 455.5L589.2 453.5L597.8 445.6L598.4 444.6L598.6 443.4L598.9 442.1L599.2 441.6L598.6 440.5L598.6 440.3L599.2 439.9L600.2 439.6L601.9 438.3L602.7 437.1L602.8 436.4L602.4 427.2L602.3 426.4L602.5 423.4L602.8 421.8L602.8 421.7L603.0 420.8L604.7 417.9L607.8 411.2L607.9 411.0L608.8 408.8L609.5 405.8L610.2 403.2L611.1 400.5L611.1 400.3L612.0 397.4L613.8 391.4L613.9 390.4L613.7 388.1L613.5 387.4L613.5 387.2L613.1 386.0L612.8 385.4L610.1 382.0L609.8 380.8L610.2 379.2L610.3 379.0L611.1 377.5L612.7 371.7L612.8 371.5L612.9 370.7L612.7 364.8L612.1 362.9L611.4 358.4L611.6 355.3L611.0 354.0L610.9 353.8L610.7 353.6L610.1 353.0L610.1 352.4L611.3 349.6L611.6 348.5L613.2 345.9L614.8 341.0L615.0 340.3L614.9 338.4L614.9 338.3L615.2 336.9L616.3 335.5L616.5 334.8L617.7 327.8L617.7 326.8L617.3 323.4L617.3 322.7L617.7 321.5L618.2 320.5L618.2 320.3L618.5 319.6L618.4 318.1L618.6 317.2L623.5 309.2L624.2 307.1L625.2 305.5L625.3 305.4L625.7 304.8L626.0 303.9L625.8 302.8L625.2 301.9L623.9 300.9L620.7 298.5L617.5 295.8L616.9 295.3L613.6 293.6L611.9 292.8L611.7 292.8L611.0 292.4L609.5 291.3L608.6 290.7L607.4 290.4L599.1 288.8L597.2 288.8L596.3 289.1L594.2 290.0L593.2 290.2L591.0 289.6L590.3 289.2L589.6 288.3L589.4 287.5L589.5 286.4L589.5 286.2M507.9 556.7L507.9 556.5L507.8 555.8L507.3 554.7L505.9 553.5L504.5 553.2L501.8 553.9L500.0 554.2L499.9 554.3L498.7 553.8L497.8 552.8L496.9 552.4L493.7 552.1L492.9 552.3L491.6 553.0L491.2 553.5L490.4 555.1L489.6 555.4L489.4 555.4L488.1 555.4L486.6 555.7L485.7 556.1L484.6 557.1L483.4 557.8L482.1 558.8L481.3 559.3L481.2 559.3L480.3 559.7L478.9 559.3L475.5 556.7L472.7 554.8L472.0 554.0L471.5 553.0L470.9 552.3L470.8 552.2L469.8 551.4L469.2 550.5L468.8 548.8L468.5 548.0L465.6 544.8L465.1 543.7L465.1 542.3L465.9 539.8L466.2 538.6L467.1 537.8L467.8 537.5L467.9 537.4L470.9 535.0L471.9 533.9L473.5 532.7L474.2 532.3L475.0 531.2L475.3 529.8L475.7 529.1L476.7 527.9L476.8 527.4L476.7 526.1L476.2 525.4L476.1 525.2L473.6 521.6L473.2 520.1L473.1 517.9L473.4 515.2L473.2 514.1L472.1 512.4L470.8 511.2L470.7 511.1L469.6 510.0L468.2 509.3L467.1 509.4L461.5 510.5L457.9 511.0L456.5 511.3L454.8 512.6L452.1 513.4L451.9 513.4L449.0 514.9L447.4 515.3L446.0 515.9L441.5 517.7L435.3 521.5L434.8 522.0L433.6 523.5L433.5 523.6L432.2 525.3L430.9 528.3L430.1 529.2L428.1 530.6L425.8 532.7L424.4 533.3L422.4 532.9L421.8 533.3L421.5 533.9L420.6 534.0L420.4 533.9L419.4 533.1L418.4 532.8L415.1 532.3L414.6 532.3L412.9 532.8L410.8 532.4L410.7 532.4L409.6 532.6L408.2 533.3L406.6 534.4L405.5 535.3L404.8 535.8L403.5 535.8L401.8 535.2L400.5 535.0L399.3 535.1L398.4 535.9L397.9 536.7L396.7 537.9L395.6 538.7L394.1 540.6L393.1 541.2L393.0 541.4L392.6 542.1L391.8 542.8L389.4 544.3L388.6 544.7L386.7 546.3L385.9 547.6L385.1 549.1L384.2 550.1L383.8 550.7L383.6 551.8L383.6 551.9L383.6 552.6L382.7 554.8L382.2 555.4L381.3 556.2L380.7 556.5L378.7 556.8L378.6 556.8L377.8 557.1L376.6 558.6L374.3 560.4L373.8 560.8L373.3 561.9L373.1 563.0L373.1 563.2L373.1 563.6L373.9 566.5L373.9 567.4L373.5 568.4L373.5 570.4L372.5 572.2L372.4 572.4L372.2 572.8L372.3 574.2L372.5 575.2L372.1 577.1L372.1 579.7L371.5 581.1L371.3 582.2L371.3 582.3L370.9 583.8L369.8 585.9L367.1 594.6L366.4 596.3L365.5 597.2L365.3 597.4M589.5 286.4L589.5 286.2L589.3 285.4L588.7 284.5L586.8 280.2L586.3 278.2L585.9 277.1L583.6 273.1L583.0 271.8L581.4 268.2L580.9 267.4L580.8 267.3L579.9 266.2L579.2 265.8L576.6 264.8L574.1 263.0L573.1 261.9L572.7 260.7L572.7 258.6L572.2 257.3L570.5 254.8L567.5 249.6L567.0 248.2L567.2 247.0L567.9 245.6L570.7 241.3L571.6 240.3L574.4 238.1L576.2 236.1L576.8 235.3L576.9 235.2L579.0 232.9L580.2 231.5L581.3 230.8L582.8 230.1L583.4 229.6L584.1 228.8L584.9 227.4L585.9 226.4L588.3 224.7L588.9 223.8L588.8 222.8L588.4 222.2L587.4 221.7L587.2 221.7M64.0 770.9L64.0 770.8L64.2 770.1L65.2 769.1L66.1 768.8L67.9 768.6L69.2 768.2L71.0 767.0L71.7 766.3L72.3 765.3L72.4 764.9L72.4 764.8L71.9 763.5L71.4 763.0L70.0 762.3L69.4 761.8L68.6 760.8L68.3 760.1L68.3 760.0L67.8 758.8L67.9 757.5L68.3 756.6L68.4 755.6L68.1 754.2L68.1 753.1L68.6 752.1L69.6 751.2L70.2 750.4L70.3 749.7L70.3 749.6L70.1 748.0L70.1 746.9L70.3 745.8L70.7 745.0L71.5 744.3L71.5 744.2"/>
+  </svg>
+</div>
+<main class="page">
+
+  <header>
+    <a class="back" href="../../">← retrospectives の一覧</a>
+    <p class="eyebrow">個人開発の振り返り ｜ 2026.10.01 – 10.11</p>
+    <h1>チャットだけで、<br><span class="glow">家族のアプリ</span>はどこまで作れるか</h1>
+    <p class="lead">パパの通勤を家族が地図で見守るアプリ（PWA）「どこどこパパ」を、<b>Claude Code のクラウドセッションへの日本語の依頼だけ</b>で作った。自宅最寄りの私鉄 → JR → 第三セクターの鉄道と乗り継ぐ通勤を、時刻表と GPS で追いかけ、家族のスマホに知らせる。バックエンドは AWS Amplify、最後はアレクサへの話しかけまで。<br>このページは、確かめたかった 4 つのことへの答えと、次に活かすことをまとめる。</p>
+    <div class="legend">
+      <span class="pill p-ai"><i></i>AI（Claude Code）が担ったこと</span>
+      <span class="pill p-hu"><i></i>人がやったこと</span>
+      <span class="pill p-op"><i></i>コンソールでの手作業</span>
+    </div>
+    <svg class="route" viewBox="0 0 1200 164" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs><clipPath id="clip-a"><rect x="-600" y="0" width="980" height="170"/></clipPath><clipPath id="clip-b"><rect x="860" y="0" width="900" height="170"/></clipPath></defs>
+    <path class="casing" d="M0 8 L22 30 H1178 L1200 8"/>
+    <path class="casing" d="M0 74 H1200"/>
+    <path class="casing" d="M0 150 H190 L222 118 H380"/>
+    <path class="casing" d="M860 118 H978 L1010 150 H1200"/>
+    <path class="halo" stroke="var(--l4)" d="M0 8 L22 30 H1178 L1200 8"/>
+    <path class="halo" stroke="var(--l2)" d="M0 74 H1200"/>
+    <path class="halo" stroke="var(--l1)" d="M0 150 H190 L222 118 H380"/>
+    <path class="halo" stroke="var(--l3)" d="M860 118 H978 L1010 150 H1200"/>
+    <path class="core" stroke="var(--l4)" d="M0 8 L22 30 H1178 L1200 8"/>
+    <path class="core" stroke="var(--l2)" d="M0 74 H1200"/>
+    <path class="core" stroke="var(--l1)" d="M0 150 H190 L222 118 H380"/>
+    <path class="core" stroke="var(--l3)" d="M860 118 H978 L1010 150 H1200"/>
+    <path class="flow" style="animation-duration:1.1s" d="M0 8 L22 30 H1178 L1200 8"/>
+    <path class="flow" style="animation-duration:2s" d="M0 74 H1200"/>
+    <path class="flow" style="animation-duration:1.6s" d="M0 150 H190 L222 118 H380"/>
+    <path class="flow" style="animation-duration:1.8s" d="M860 118 H978 L1010 150 H1200"/>
+    <circle class="st" cx="70" cy="150" r="6"/>
+    <circle class="st" cx="150" cy="150" r="6"/>
+    <circle class="st" cx="290" cy="118" r="6"/>
+    <circle class="st" cx="130" cy="74" r="6"/>
+    <circle class="st" cx="250" cy="74" r="6"/>
+    <circle class="st" cx="480" cy="74" r="6"/>
+    <circle class="st" cx="580" cy="74" r="6"/>
+    <circle class="st" cx="680" cy="74" r="6"/>
+    <circle class="st" cx="780" cy="74" r="6"/>
+    <circle class="st" cx="960" cy="74" r="6"/>
+    <circle class="st" cx="1060" cy="74" r="6"/>
+    <circle class="st" cx="1140" cy="74" r="6"/>
+    <circle class="st" cx="930" cy="118" r="6"/>
+    <circle class="st" cx="1090" cy="150" r="6"/>
+    <circle class="st" cx="1160" cy="150" r="6"/>
+    <circle class="st far" cx="110" cy="30" r="6"/>
+    <circle class="st far" cx="1090" cy="30" r="6"/>
+    <g class="tr" clip-path="url(#clip-a)">
+      <g class="car"><image href="car-red-head.webp" x="-36.8" y="-17.0" width="73.9" height="19.0"/></g>
+      <g class="car"><image href="car-red-tail.webp" x="-37.1" y="-13.9" width="73.9" height="15.9"/></g>
+    </g>
+    <g class="tr" clip-path="url(#clip-b)">
+      <g class="car"><image href="car-green-head.webp" x="-36.8" y="-13.9" width="73.9" height="15.9"/></g>
+      <g class="car"><image href="car-green-tail.webp" x="-37.1" y="-13.9" width="73.9" height="15.9"/></g>
+    </g>
+    <rect class="xfer" x="371" y="21" width="18" height="106" rx="9"/>
+    <rect class="xfer" x="851" y="21" width="18" height="106" rx="9"/>
+    <g class="tr">
+      <g class="car"><image href="car-orange-head.webp" x="-36.8" y="-17.0" width="73.9" height="19.0"/></g>
+      <g class="car"><image href="car-orange-mid.webp" x="-36.8" y="-13.9" width="73.6" height="15.9"/></g>
+      <g class="car"><image href="car-orange-tail.webp" x="-37.1" y="-13.9" width="73.9" height="15.9"/></g>
+    </g>
+    <g class="tr">
+      <g class="car"><image href="car-blue-head.webp" x="-45.7" y="-13.0" width="133.2" height="15.0"/></g>
+      <g class="car"><image href="car-blue-mid.webp" x="-45.7" y="-13.0" width="91.7" height="15.0"/></g>
+      <g class="car"><image href="car-blue-mid.webp" x="-45.7" y="-13.0" width="91.7" height="15.0"/></g>
+      <g class="car"><image href="car-blue-tail.webp" x="-87.2" y="-13.0" width="133.2" height="15.0"/></g>
+    </g>
+    </svg>
+  </header>
+
+  <section class="section" aria-labelledby="h-stats">
+    <h2 id="h-stats"><span class="num">01</span>数字で見る</h2>
+    <div class="stats">
+      <div class="stat"><span class="v">11<small>日</small></span><span class="l">開発期間</span><span class="n">最初のコミットから最後の修正まで。コミットがあったのは 7 日</span></div>
+      <div class="stat"><span class="v">20<small>回</small></span><span class="l">本番への反映</span><span class="n">「mainに反映して」→ PR → マージ。毎回テスト環境で確かめてから</span></div>
+      <div class="stat"><span class="v">56</span><span class="l">コミット</span><span class="n">マージを除く。うち 34 は 3 日目の 1 日に集中</span></div>
+      <div class="stat"><span class="v">45</span><span class="l">機能のブランチ</span><span class="n">要望ごとにテスト環境のブランチから切った</span></div>
+      <div class="stat"><span class="v">7.5<small>千行</small></span><span class="l">TypeScript</span><span class="n">画面・時刻表の計算・バックエンドの関数</span></div>
+      <div class="stat"><span class="v">約100<small>回</small></span><span class="l">チャットでの依頼</span><span class="n">スクリーンショット付きの要望と「mainに反映」を含む</span></div>
+    </div>
+  </section>
+
+  <div class="track t1" aria-hidden="true"><div class="train"><img src="car-red-tail.webp" alt="" width="315" height="68" decoding="async"><img class="pan" src="car-red-head.webp" alt="" width="315" height="81" decoding="async"></div></div>
+
+  <section class="section" aria-labelledby="h-qs">
+    <h2 id="h-qs"><span class="num">02</span>確かめたかった 4 つのこと</h2>
+    <p class="sub">問い → 結果 → 教訓 → 次に活かす。上の光る線は、アプリの地図に流れている路線の色。</p>
+    <div class="qs">
+
+      <article class="q c1">
+        <div class="qh"><svg class="ni"><use href="#i-chat"/></svg><span class="qno">Q1</span></div>
+        <h3>チャットの要望だけで、どこまでアプリを作れるか</h3>
+        <div class="block"><span class="tag t-ok">結果：最後まで作れた</span>
+          <p class="ans">実際の線路に沿って走る <b>3D の電車の地図</b>、時刻表から<b>乗り継ぎを見込む計算</b>、GPS で「乗れたか」を判定、家族への<b>通知</b>（決まった時刻の予約・押し間違えの 2 分待ち・種類ごとのオン/オフ・履歴）、お出かけ中の<b>位置の共有</b>、<b>アレクサ</b>まで。人がやったのは、要望・実機での確認・判断・コンソール操作だけ。</p>
+        </div>
+        <div class="block"><span class="tag t-learn">教訓</span>
+          <ul>
+            <li><b>スクリーンショット＋一言</b>の要望が、いちばん速く正確に伝わった</li>
+            <li>「修正はせずに方針を相談したい」を挟むと、作り直しが減った</li>
+            <li>使う人の目線の穴は人が見つけた。例：パパ側で通知を止めると、家族は「なぜ来ないか」が分からない → 受け取る側だけで選べる形に</li>
+          </ul>
+        </div>
+        <div class="block"><span class="tag t-next">次に活かす</span>
+          <ul><li>見た目、特に 3D の形は、言葉だけでは伝わりにくい（下の「課題」）</li></ul>
+        </div>
+      </article>
+
+      <article class="q c2">
+        <div class="qh"><svg class="ni"><use href="#i-cloud"/></svg><span class="qno">Q2</span></div>
+        <h3>AWS Amplify（Gen 2）での開発体験</h3>
+        <div class="block"><span class="tag t-ok">結果：テスト環境と本番の安全網になった</span>
+          <p class="ans">ブランチごとに<b>バックエンドごと別の環境</b>ができる。テスト用のブランチに入れれば自動で確かめられ、本番を壊さずに毎日出せた。Lambda・DynamoDB のストリーム・予約実行・Web Push まで、すべてコードで書けた。</p>
+        </div>
+        <div class="block"><span class="tag t-ng">つまずき</span>
+          <ul>
+            <li>スタックどうしの参照が輪になり、本番のデプロイが失敗。最初の推測は外れ、手元でテンプレートを作って再現してから直した</li>
+            <li>環境変数は<b>ビルドのとき</b>に読まれる。後から入れて、アレクサの呼び出し許可が付かなかった</li>
+            <li>テスト用と本番で、ユーザーもデータも別。設定のやり直しが要る</li>
+          </ul>
+        </div>
+        <div class="block"><span class="tag t-learn">教訓 / 次に活かす</span>
+          <ul>
+            <li>推測で直さず、<b>手元で再現してから</b>直す</li>
+            <li>「どの資源がどれを参照してよいか」を決めて、設計メモに残す</li>
+            <li>シークレット・環境変数・ブランチごとの値の置き場所を、最初に表にしておく</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="q c3">
+        <div class="qh"><svg class="ni"><use href="#i-phone"/></svg><span class="qno">Q3</span></div>
+        <h3>Claude のクラウドセッションだけで開発する</h3>
+        <div class="block"><span class="tag t-ok">結果：手元の開発機なしで完結した</span>
+          <p class="ans">スマホのチャットから依頼し、コンテナの中で型チェック・lint・ビルド、ヘッドレスのブラウザ（<b>偽の時計</b>で時刻を進める）での画面確認、バックエンドのテンプレート生成まで済んだ。</p>
+        </div>
+        <div class="block"><span class="tag t-ng">できなかったこと</span>
+          <ul>
+            <li>実機での確認、AWS とアレクサのコンソール操作</li>
+            <li>コンテナは使い捨て。会話が長くなると、前半は要約されて細部が抜ける</li>
+          </ul>
+        </div>
+        <div class="block"><span class="tag t-learn">教訓 / 次に活かす</span>
+          <ul>
+            <li><b>CLAUDE.md を設計メモとして機能ごとに更新</b>し続けたのが、要約をまたぐ記憶の代わりになった</li>
+            <li>毎回、「確かめたこと」と「確かめていない（実機で見てほしい）こと」を分けて伝える</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="q c4">
+        <div class="qh"><svg class="ni"><use href="#i-voice"/></svg><span class="qno">Q4</span></div>
+        <h3>アレクサ連携をやってみる</h3>
+        <div class="block"><span class="tag t-ok">結果：話しかけて答えるところまで</span>
+          <p class="ans">画面と同じ計算（時刻表・到着予定）を Lambda でそのまま使い回し、「<b>パパはどこ</b>」「<b>何時に帰ってくる</b>」「<b>早く帰ってきてって伝えて</b>」の 3 つを作った。ストアには出さず、開発中のまま家族の機器で使う。</p>
+        </div>
+        <div class="block"><span class="tag t-ng">つまずき</span>
+          <ul>
+            <li>Lambda の呼び出し許可が付かず、エンドポイントを登録できなかった</li>
+            <li>呼び出し名が別の言葉に聞き取られる（「ドコドコパ」「ドコドコパンパ」）→ 短い呼び出し名に変えて解決</li>
+          </ul>
+        </div>
+        <div class="block"><span class="tag t-learn">教訓 / 次に活かす</span>
+          <ul>
+            <li>音声は「<b>どう聞き取られるか</b>」から名前を決める。音声履歴で確かめる</li>
+            <li>テスト画面に文字で入れて、設定の問題か聞き取りの問題かを切り分ける</li>
+          </ul>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="h-issues">
+    <h2 id="h-issues"><span class="num">03</span>課題 ―― 次はここを変える</h2>
+    <div class="issues">
+      <article class="issue">
+        <h3>すべての依頼を、いちばん上のモデル 1 本で処理していた</h3>
+        <p>設計も、単純な修正も、画面確認も、テストの実行と結果の読み取りも、同じ Opus が担った。手軽な反面、費用がかさむ。</p>
+        <div class="next"><b>次は：サブエージェントを設計して、モデルを使い分ける</b>
+          <div class="models">
+            <span class="m">Opus <span>判断・設計・原因の調べ</span></span>
+            <span class="m">Sonnet <span>範囲の決まった実装・単純な作業</span></span>
+            <span class="m">Haiku <span>テストの実行と結果の要約</span></span>
+          </div>
+          <ul><li>別のプロジェクトで最後に入れた使い分けを、こちらは最初から</li></ul>
+        </div>
+      </article>
+      <article class="issue">
+        <h3>3D モデルのデザインは、言葉で伝えにくい</h3>
+        <p>乗っている電車を作り込んだ 3D にしたが、新幹線の先頭車は何度作り直しても、今も納得しきれていない。今回はここに費用をかけないと決めて、妥協した。</p>
+        <div class="next"><b>次は：形の要望は、言葉より先に材料と基準を渡す</b>
+          <ul>
+            <li>参考画像・横から見た線画・寸法の比率を最初に渡す</li>
+            <li>角度を固定した見比べ用のページを作り、1 か所ずつ直す</li>
+            <li>「ここまでで良し」の基準と、やり直しの回数の上限を先に決める</li>
+          </ul>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <div class="track t2" aria-hidden="true"><div class="train"><img src="car-orange-tail.webp" alt="" width="315" height="68" decoding="async"><img src="car-orange-mid.webp" alt="" width="314" height="68" decoding="async"><img class="pan" src="car-orange-head.webp" alt="" width="315" height="81" decoding="async"></div></div>
+
+  <section class="section" aria-labelledby="h-themes">
+    <h2 id="h-themes"><span class="num">04</span>やり取りから見えたこと</h2>
+    <div class="themes">
+      <div class="theme"><svg class="ni"><use href="#i-phone"/></svg><h3>実機でしか分からない</h3><p>メニューを開いたタップが中のボタンを押す、光の輪が位置の更新のたびにやり直す、横画面で重なる、古い iPad で真っ黒。どれもスクリーンショット 1 枚で原因に近づけた。</p></div>
+      <div class="theme"><svg class="ni"><use href="#i-shield"/></svg><h3>家族が使う前提の安全装置</h3><p>押し間違えに 2 分の取り消し時間、同じ知らせの連続は 1 回に、送る前に「伝えますか？」、ログアウトは確認つき。作る側より使う側の手元で効く。</p></div>
+      <div class="theme"><svg class="ni"><use href="#i-pin"/></svg><h3>線引きは言葉にして残す</h3><p>「位置は判定にだけ使い、送らない」で始め、のちに「お出かけ中は家族と共有する」と線を引き直した。決めた線は、その場で設計メモに書いた。</p></div>
+      <div class="theme"><svg class="ni"><use href="#i-loop"/></svg><h3>小さく出して、毎日直す</h3><p>「mainに反映して」が 20 回。毎回テスト環境で確かめてから本番へ。直してほしいことが、次の依頼の種になった。</p></div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="h-steps">
+    <h2 id="h-steps"><span class="num">05</span>1 つの要望が本番に届くまで</h2>
+    <ol class="steps">
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-chat"/></svg><span class="no">01</span><span class="t">要望</span></div><span class="d">日本語で、スクリーンショットを添えて</span><div class="who"><span class="pill p-hu"><i></i>人</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-history"/></svg><span class="no">02</span><span class="t">相談</span></div><span class="d">迷うところだけ、選択肢とおすすめを出して決める</span><div class="who"><span class="pill p-hu"><i></i>人</span><span class="pill p-ai"><i></i>AI</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-loop"/></svg><span class="no">03</span><span class="t">機能のブランチ</span></div><span class="d">テスト環境のブランチから切る</span><div class="who"><span class="pill p-ai"><i></i>AI</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-gear"/></svg><span class="no">04</span><span class="t">実装</span></div><span class="d">画面・時刻表の計算・バックエンド。設計メモも更新</span><div class="who"><span class="pill p-ai"><i></i>AI</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-gps"/></svg><span class="no">05</span><span class="t">自分で確かめる</span></div><span class="d">型・lint・ビルド、ヘッドレスのブラウザで画面、場面ごとの計算、テンプレートの輪の検査</span><div class="who"><span class="pill p-ai"><i></i>AI</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-cloud"/></svg><span class="no">06</span><span class="t">テスト環境</span></div><span class="d">ブランチに入れると、バックエンドごと自動でデプロイ</span><div class="who"><span class="pill p-ai"><i></i>AI</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-phone"/></svg><span class="no">07</span><span class="t">実機で確認</span></div><span class="d">家族のスマホで使う。必要ならコンソールで設定</span><div class="who"><span class="pill p-hu"><i></i>人</span><span class="pill p-op"><i></i>手作業</span></div></li>
+      <li class="step"><div class="top"><svg class="ni"><use href="#i-bell"/></svg><span class="no">08</span><span class="t">本番へ</span></div><span class="d">「mainに反映して」→ PR → マージ</span><div class="who"><span class="pill p-hu"><i></i>人</span><span class="pill p-ai"><i></i>AI</span></div></li>
+    </ol>
+  </section>
+
+  <div class="track t3" aria-hidden="true"><div class="train"><img src="car-green-tail.webp" alt="" width="315" height="68" decoding="async"><img src="car-green-head.webp" alt="" width="315" height="68" decoding="async"></div></div>
+
+  <section class="section" aria-labelledby="h-cases">
+    <h2 id="h-cases"><span class="num">06</span>つまずいた実例</h2>
+    <div class="cases">
+      <div class="case" style="--c: var(--l2)"><span class="k">デプロイ</span><span class="w">予約の仕組みを足したら、本番のデプロイが失敗した</span><span class="th">スタックの参照が輪になっていた。手元でテンプレートを作り、輪を探す小さな検査で再現。予約専用の関数をやめ、通知の関数が自分自身を予約する形に変えて解消。</span></div>
+      <div class="case" style="--c: var(--l1)"><span class="k">実機</span><span class="w">メニューを開いたタップが、そのまま中のボタンを押した</span><span class="th">開いてすぐの 0.4 秒は押せないようにした。テストでは「閉じたか」しか見ておらず、押せたかを確かめていなかった。</span></div>
+      <div class="case" style="--c: var(--l1)"><span class="k">実機</span><span class="w">光の輪のアニメーションが、毎回最初からやり直す</span><span class="th">位置の更新のたびに要素を付け直していた。付け直さず、位置だけを動かすように。</span></div>
+      <div class="case" style="--c: var(--l3)"><span class="k">端末</span><span class="w">古い iPad で、画面が真っ黒</span><span class="th">ビルドの既定の対象が新しいブラウザだった。端末の更新で解決。対応端末は最初に決めておくべきだった。</span></div>
+      <div class="case" style="--c: var(--l4)"><span class="k">音声</span><span class="w">アレクサが呼び出し名を聞き取れない</span><span class="th">音声履歴で聞き取られ方を確かめ、短く聞き取りやすい呼び出し名に変えた。コードは変えずに済んだ。</span></div>
+      <div class="case" style="--c: var(--cyan)"><span class="k">通信</span><span class="w">設定したパパの画像が、初期の顔に戻って見えた</span><span class="th">アプリを裏に回すと受け取りが切れていた。戻ったときに張り直し、保存は変わった項目だけにして、消える危険も塞いだ。</span></div>
+    </div>
+  </section>
+
+  <div class="track t4" aria-hidden="true"><div class="train"><img src="car-blue-tail.webp" alt="" width="568" height="64" decoding="async"><img src="car-blue-mid.webp" alt="" width="391" height="64" decoding="async"><img src="car-blue-mid.webp" alt="" width="391" height="64" decoding="async"><img src="car-blue-head.webp" alt="" width="568" height="64" decoding="async"></div></div>
+
+  <section class="section" aria-labelledby="h-next">
+    <h2 id="h-next"><span class="num">07</span>次に活かすこと</h2>
+    <div class="two">
+      <div class="list good">
+        <h3><svg class="ni" style="color:#6EE7B7"><use href="#i-shield"/></svg>うまくいったこと</h3>
+        <ul>
+          <li><b>スクリーンショット＋一言</b>の要望</li>
+          <li>テスト環境 → 本番のブランチ運用。本番を壊さずに毎日出せた</li>
+          <li>設計メモ（CLAUDE.md）を機能ごとに育てる</li>
+          <li>「確かめたこと」と「確かめていないこと」を分けて伝える</li>
+          <li>迷う機能は、作る前に方針だけ相談する</li>
+        </ul>
+      </div>
+      <div class="list next">
+        <h3><svg class="ni" style="color:#FDE68A"><use href="#i-loop"/></svg>次に変えたいこと</h3>
+        <ul>
+          <li><b>モデルの使い分けとサブエージェント</b>（Opus・Sonnet・Haiku）を最初から</li>
+          <li><b>見た目の要望は、画像と基準と上限を先に</b></li>
+          <li>対応する端末とブラウザを最初に決める</li>
+          <li>読み込みに失敗しても画面全体が消えない受け皿を、最初から入れる</li>
+          <li>実機で確かめる手順を、機能ごとに短く残す</li>
+          <li>振り返り用の数字を、途中から記録しておく</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p class="big">書くのは AI、<span class="glow">確かめるのは家族の手の中</span>。</p>
+    <p class="p">チャットの要望だけで、地図・3D・通知・バックエンド・音声まで届いた。速さを生んだのは、スクリーンショットで伝える要望と、テスト環境を挟んで毎日出す運用。足りなかったのは、モデルの使い分けによる費用の設計と、形を伝えるための材料。次は、そこから始める。</p>
+    <p class="src">数字は、プロジェクトのリポジトリ（非公開）の git の記録と、開発の会話より（2026-10-12 時点）。実データ・地名・識別子は含まない。<br>地図：Natural Earth・国土数値情報（国土交通省）を加工。電車の絵は、アプリの 3D モデルから描き出したもの。</p>
+  </footer>
+
+</main>
+<script>
+(() => {
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const route = document.querySelector('.route');
+  // ヘッダーの路線図の電車：アプリと同じく、前後の台車の位置から車両の向きを決める
+  const LINES = [{"pts":[[-300,150],[190,150],[222,118],[800,118]],"v":19,"s0":700,"cars":[[0,25.9],[73.4,25.9]]},{"pts":[[500,118],[978,118],[1010,150],[1600,150]],"v":17,"s0":700,"cars":[[0,25.9],[73.4,25.9]]},{"pts":[[-260,74],[1750,74]],"v":25,"s0":900,"cars":[[0,25.9],[73.4,25.9],[146.8,25.9]]},{"pts":[[-420,30],[2700,30]],"v":83,"s0":1250,"cars":[[0,32.4],[91.5,32.4],[182.9,32.4],[274.4,32.4]]}];
+  const groups = route ? [...route.querySelectorAll('.tr')] : [];
+  const prep = LINES.map((l) => {
+    const seg = []; let P = 0;
+    for (let i = 1; i < l.pts.length; i++) { const [x0, y0] = l.pts[i - 1], [x1, y1] = l.pts[i]; const d = Math.hypot(x1 - x0, y1 - y0); seg.push([x0, y0, x1, y1, P, d]); P += d; }
+    return { ...l, seg, P };
+  });
+  const at = (l, s) => {
+    s = ((s % l.P) + l.P) % l.P;
+    for (const [x0, y0, x1, y1, a, d] of l.seg) if (s <= a + d) { const k = (s - a) / d; return [x0 + (x1 - x0) * k, y0 + (y1 - y0) * k]; }
+    return l.pts[l.pts.length - 1];
+  };
+  const drawRoute = (t) => {
+    prep.forEach((l, i) => {
+      const cars = groups[i].children;
+      const head = l.s0 + l.v * t;
+      l.cars.forEach(([off, half], j) => {
+        const c = head - off;
+        // 道のりの端（見えない所）をまたぐ車両は描かない
+        const wrap = Math.floor((c - half) / l.P) !== Math.floor((c + half) / l.P);
+        const [fx, fy] = at(l, c + half), [rx, ry] = at(l, c - half);
+        const a = Math.atan2(fy - ry, fx - rx) * 180 / Math.PI;
+        cars[j].setAttribute('transform', `translate(${((fx + rx) / 2).toFixed(1)} ${((fy + ry) / 2).toFixed(1)}) rotate(${a.toFixed(1)})`);
+        cars[j].style.visibility = wrap ? 'hidden' : '';
+      });
+    });
+  };
+  if (route) {
+    let visible = true;
+    new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(route);
+    const t0 = performance.now();
+    const loop = (now) => { if (visible) drawRoute((now - t0) / 1000); requestAnimationFrame(loop); };
+    drawRoute(0);
+    if (!still) requestAnimationFrame(loop);
+  }
+  // 背景の地図：ページを下るほど、地図は北から南へ流れる
+  const map = document.querySelector('.bgmap svg');
+  let ticking = false;
+  const place = () => {
+    ticking = false;
+    const max = document.documentElement.scrollHeight - innerHeight;
+    const p = max > 0 ? Math.min(1, Math.max(0, scrollY / max)) : 0;
+    const travel = map.getBoundingClientRect().height - innerHeight * 0.85;
+    map.style.transform = `translate(-50%, ${(-p * travel).toFixed(1)}px)`;
+  };
+  if (map && !still) {
+    addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(place); } }, { passive: true });
+    addEventListener('resize', place);
+    place();
+  }
+  // 節の区切り：線路の上を電車がゆっくり走る（流れる点の 2 倍の速さ。見えている間だけ動く）
+  if (still || !('IntersectionObserver' in window)) return;
+  const SPEED = 22.5;
+  const setup = (t) => {
+    const train = t.querySelector('.train');
+    const w = t.clientWidth, tw = train.offsetWidth, dur = (w + tw) / SPEED;
+    t.style.setProperty('--w', w + 'px');
+    train.style.setProperty('--dur', dur.toFixed(1) + 's');
+    if (!train.dataset.set) { train.dataset.set = '1'; train.style.setProperty('--delay', (-dur * (0.25 + Math.random() * 0.2)).toFixed(1) + 's'); }
+  };
+  const tracks = [...document.querySelectorAll('.track')];
+  const io = new IntersectionObserver((es) => { for (const e of es) e.target.classList.toggle('go', e.isIntersecting); });
+  const init = () => tracks.forEach(setup);
+  addEventListener('load', init);
+  addEventListener('resize', init);
+  init();
+  tracks.forEach((t) => io.observe(t));
+})();
+</script>
+</body>
+</html>
